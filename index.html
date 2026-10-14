@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<!-- The page talks only to GitHub's API and loads only its own files. A game being played runs in a sealed frame
+     that inherits this policy: it cannot reach the network, this page, or the token. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src data: blob:; font-src data:; connect-src https://api.github.com data:; frame-src 'self' blob: data:; base-uri 'none'; form-action 'none'">
+<meta name="referrer" content="no-referrer">
+<meta name="robots" content="noindex, nofollow">
+<title>Desk</title>
+<link rel="stylesheet" href="css/desk.css">
+<script type="module" src="js/app.js"></script>
+</head>
+<body>
+<header class="top">
+  <div class="brand"><span class="mark" aria-hidden="true"></span>Desk</div>
+  <nav id="nav" hidden>
+    <a href="#dashboard" data-v="dashboard">Dashboard</a>
+    <a href="#submissions" data-v="submissions">Submissions</a>
+    <a href="#submit" data-v="submit">Submit</a>
+    <a href="#builds" data-v="builds" data-owner>Builds</a>
+    <a href="#art" data-v="art">Art</a>
+  </nav>
+  <div class="who" id="who" hidden><span id="who-name"></span><button class="link" id="logout" type="button">Sign out</button></div>
+</header>
+<main id="view" aria-live="polite"></main>
+<div class="player" id="player" hidden>
+  <div class="player-bar">
+    <strong id="player-title"></strong>
+    <label class="inline">Start at level <input id="player-level" type="number" min="1" value="1"></label>
+    <button type="button" id="player-restart">Restart</button>
+    <button type="button" class="ghost" id="player-close">Close</button>
+  </div>
+  <div class="player-stage"><div class="phone"><iframe id="player-frame" title="Game" sandbox="allow-scripts"></iframe></div><p class="player-msg" id="player-msg"></p></div>
+</div>
+<noscript>This tool needs JavaScript.</noscript>
+</body>
+</html>
