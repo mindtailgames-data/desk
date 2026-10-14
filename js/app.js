@@ -395,6 +395,7 @@ async function buildsView() {
     view.lastChild.remove();
     const pre = (() => { try { const v = JSON.parse(sessionStorage.getItem('desk.prefill') || 'null'); sessionStorage.removeItem('desk.prefill'); return v; } catch (e) { return null; } })() || {};
     const ids = [...new Set(list.map(g => g.id).concat(pre.game ? [pre.game] : []))];
+    if (!ids.length) view.append(note('', 'Nothing to build yet: a game can be built once its submission is approved (or, as a sandbox test, from a green submission).'));
     const game = el('select', { id: 'b-game' }, ...ids.map(id => el('option', { value: id, text: (list.find(g => g.id === id) || { title: id }).title + ' (' + id + ')', selected: id === pre.game })));
     const source = el('select', { id: 'b-source' }), pkg = el('input', { id: 'b-pkg', spellcheck: 'false' });
     const email = el('input', { id: 'b-email', type: 'email', placeholder: 'support@…' }), terms = el('input', { id: 'b-terms', type: 'url', placeholder: 'https://…' }), privacy = el('input', { id: 'b-privacy', type: 'url', placeholder: 'https://…' });
@@ -426,7 +427,7 @@ async function buildsView() {
         setTimeout(() => refreshRuns(runs), 4000);
       });
     });
-    view.append(el('section', { class: 'card' }, el('h2', { text: 'New build' }),
+    if (ids.length) view.append(el('section', { class: 'card' }, el('h2', { text: 'New build' }),
       el('div', { class: 'form' },
         el('label', { for: 'b-game' }, 'Game', game), el('label', { for: 'b-source' }, 'From', source),
         el('label', { for: 'b-pkg' }, 'Package name (never changes after the first upload)', pkg),

@@ -44,7 +44,9 @@ nav a.on { color: var(--accent); background: var(--accent-soft); }
 main { max-width: 1080px; margin: 0 auto; padding-block: 24px 64px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
   display: flex; flex-direction: column; gap: 20px; }
 .head { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
-.head > div { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.head > div:first-child { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.head > .row a { text-decoration: none; padding: 6px 12px; border-radius: 7px; font-weight: 600; }
+.head > .row a:not(.muted) { background: var(--accent-soft); }
 
 /* blocks */
 .card { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 16px; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
