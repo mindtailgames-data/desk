@@ -1,4 +1,4 @@
-// node test/builder.test.mjs <GameFactory folder>: the browser builder must make exactly the page Python makes
+// node test/builder.test.mjs <factory folder>: the browser builder must make exactly the page Python makes
 import fs from 'fs'; import path from 'path'; import { execFileSync } from 'child_process';
 import { buildGame } from '../js/builder.js';
 const F = process.argv[2];

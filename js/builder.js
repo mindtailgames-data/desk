@@ -1,5 +1,5 @@
-// The game builder, in the browser: the same page as GameFactory's kit/build/build_game.py + kit.py make.
-// Works on any "reader" ({ text(path), bytes(path), list(dir) }), so the website reads the kit from GameFactory main
+// The game builder, in the browser: the same page as the factory's own Python build makes.
+// Works on any "reader" ({ text(path), bytes(path), list(dir) }), so the website reads the kit from the factory's main branch
 // and the game from a submission branch, and a test reads both from disk. Nothing is sent anywhere.
 
 const ORDER = ['economy', 'levels', 'audio', 'haptics', 'analytics', 'settings', 'flows', 'boosters', 'home', 'splash'];
@@ -35,7 +35,7 @@ export function checkPublic(cfg, path = 'cfg') {
   }
 }
 
-// kit: a reader rooted at GameFactory's kit/ folder
+// kit: a reader rooted at the factory's kit/ folder
 async function first(kit, folder, name) {
   const files = (await kit.list('art/' + folder)).sort();
   const f = files.find(x => stem(x) === name);
