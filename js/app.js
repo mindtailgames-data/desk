@@ -33,7 +33,15 @@ function ago(iso) {
   if (s < 90) return 'just now'; if (s < 5400) return Math.round(s / 60) + ' min ago'; if (s < 129600) return Math.round(s / 3600) + ' h ago';
   return Math.round(s / 86400) + ' days ago';
 }
-const when = iso => new Date(iso).toLocaleString(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+// Every time is shown in Istanbul time, whatever the viewer's computer is set to
+const TZ = 'Europe/Istanbul';
+const fmtShort = new Intl.DateTimeFormat('en-GB', { timeZone: TZ, day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+const fmtFull = new Intl.DateTimeFormat('sv-SE', { timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+const fmtDay = new Intl.DateTimeFormat('sv-SE', { timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit' });
+const when = iso => fmtShort.format(new Date(iso));                  // 14 Oct, 16:58
+const full = d => fmtFull.format(d instanceof Date ? d : new Date(d)); // 2026-10-14 16:58
+const relDate = s => new Date(String(s).replace(' UTC', 'Z').replace(' ', 'T'));   // releases.json: "2026-10-14 13:58 UTC"
+const ISTANBUL = 'Times are Istanbul time.';
 async function pool(items, n, fn) { const out = []; let i = 0; await Promise.all(Array.from({ length: Math.min(n, items.length) }, async () => { while (i < items.length) { const k = i++; out[k] = await fn(items[k], k); } })); return out; }
 function page(view, title, sub, ...actions) {
   view.replaceChildren(el('div', { class: 'head' }, el('div', {}, el('h1', { text: title }), sub ? el('p', { class: 'muted', text: sub }) : null), el('div', { class: 'row' }, ...actions)));
@@ -185,7 +193,7 @@ async function dashboardView() {
       el('div', { class: 'card stat' }, el('span', { class: 'muted small', text: 'Games on main' }), el('b', { text: list.length })),
       el('div', { class: 'card stat' }, el('span', { class: 'muted small', text: 'Open submissions' }), el('b', { text: open.length }),
         el('div', { class: 'row small' }, chip('good', count('green') + ' green'), chip('bad', count('red') + ' to fix'), chip('warn', count('running') + ' checking'))),
-      S.canBuild ? el('div', { class: 'card stat' }, el('span', { class: 'muted small', text: 'Builds (last 30 days)' }), el('b', { text: rel.filter(r => Date.now() - new Date(r.date.replace(' UTC', 'Z').replace(' ', 'T')) < 30 * 864e5).length })) : null));
+      S.canBuild ? el('div', { class: 'card stat' }, el('span', { class: 'muted small', text: 'Builds (last 30 days)' }), el('b', { text: rel.filter(r => Date.now() - relDate(r.date) < 30 * 864e5).length })) : null));
     const latest = (id, env) => rel.filter(r => r.game === id && r.environment === env).slice(-1)[0];
     const openFor = id => open.find(p => prKind(p).id === id);
     const rows = list.sort((a, b) => String(a.title).localeCompare(b.title)).map(g => {
@@ -193,8 +201,8 @@ async function dashboardView() {
       return el('tr', {},
         el('td', {}, el('strong', { text: g.title }), el('div', { class: 'muted small', text: g.id })),
         el('td', { class: 'num', text: g.levels == null ? '?' : g.levels }), el('td', { class: 'num', text: g.version || '' }),
-        S.canBuild ? el('td', { class: 'small' }, s ? s.versionCode + ' · ' + s.date.slice(0, 10) : '–') : null,
-        S.canBuild ? el('td', { class: 'small' }, p ? p.versionCode + ' · ' + p.date.slice(0, 10) : '–', p ? el('div', { class: 'muted', text: p.package }) : null) : null,
+        S.canBuild ? el('td', { class: 'small' }, s ? s.versionCode + ' · ' + fmtDay.format(relDate(s.date)) : '–') : null,
+        S.canBuild ? el('td', { class: 'small' }, p ? p.versionCode + ' · ' + fmtDay.format(relDate(p.date)) : '–', p ? el('div', { class: 'muted', text: p.package }) : null) : null,
         el('td', {}, sub ? el('a', { href: '#submission/' + sub.number, text: 'Update open (#' + sub.number + ')' }) : el('span', { class: 'muted small', text: '–' })),
         el('td', {}, el('button', { class: 'ghost', type: 'button', text: 'Play', onclick: async () => play(g.title, async () => gamePage(await mainSha(), g.id)) })));
     });
@@ -223,7 +231,7 @@ async function submissionsView(state) {
         el('span', { class: 'tag', text: k.kind === 'game' ? 'Game' : k.kind === 'art' ? 'Art' : 'Factory' }),
         el('span', { class: 'title', text: p.title }),
         state === 'open' ? checkChip(checks[i]) : chip(p.merged_at ? 'good' : '', p.merged_at ? 'Approved' : 'Declined'),
-        el('span', { class: 'meta', text: '#' + p.number + ' · ' + p.user.login + ' · updated ' + ago(p.updated_at) })));
+        el('span', { class: 'meta', title: full(p.updated_at) + ' (Istanbul)', text: '#' + p.number + ' · ' + p.user.login + ' · updated ' + ago(p.updated_at) })));
     });
     view.append(box);
   } catch (e) { fail(view, e); }
@@ -243,7 +251,7 @@ async function submissionView(n) {
     const open = p.state === 'open';
     const stateChip = open ? checkChip(check) : chip(p.merged_at ? 'good' : '', p.merged_at ? 'Approved and merged' : 'Declined');
     view.append(el('div', { class: 'head' }, el('div', {}, el('span', { class: 'tag', text: k.kind === 'game' ? 'Game · ' + k.id : k.kind === 'art' ? 'Art' : 'Factory' }), el('h1', { text: p.title }),
-      el('p', { class: 'muted', text: '#' + n + ' by ' + p.user.login + ' · branch ' + p.head.ref + ' · updated ' + ago(p.updated_at) })),
+      el('p', { class: 'muted', text: '#' + n + ' by ' + p.user.login + ' · branch ' + p.head.ref + ' · updated ' + ago(p.updated_at) + ' (' + full(p.updated_at) + ', Istanbul)' })),
       el('div', { class: 'row' }, stateChip, el('a', { href: p.html_url, target: '_blank', rel: 'noopener noreferrer', text: 'Open on GitHub' }))));
 
     const act = el('div', { class: 'row' }), msg = el('div', { class: 'stack' });
@@ -271,7 +279,7 @@ async function submissionView(n) {
     view.append(el('section', { class: 'card' }, el('h2', { text: files.length + ' changed file' + (files.length === 1 ? '' : 's') }),
       el('div', { class: 'files' }, ...files.map(f => el('div', { text: f.status.padEnd(9) + ' ' + f.filename })))));
     const people = comments.filter(c => !(c.user && c.user.type === 'Bot'));
-    if (people.length) view.append(el('section', { class: 'card' }, el('h2', { text: 'Notes' }), ...people.map(c => el('div', { class: 'stack' }, el('span', { class: 'muted small', text: c.user.login + ' · ' + when(c.created_at) }), el('p', { text: c.body })))));
+    if (people.length) view.append(el('section', { class: 'card' }, el('h2', { text: 'Notes' }), el('p', { class: 'small muted', text: ISTANBUL }), ...people.map(c => el('div', { class: 'stack' }, el('span', { class: 'muted small', text: c.user.login + ' · ' + when(c.created_at) }), el('p', { text: c.body })))));
   } catch (e) { fail(view, e); }
 }
 function confirmBox(box, question, label, fn) {
@@ -437,12 +445,12 @@ async function buildsView() {
           el('div', { class: 'row' }, el('label', { class: 'inline', for: 'b-sandbox' }, envS, 'Sandbox (testing)'), el('label', { class: 'inline', for: 'b-production' }, envP, 'Production (store; only from main)')))),
       el('div', { class: 'row' }, start), msg));
     const runs = el('div', { class: 'list' });
-    view.append(el('section', { class: 'card' }, el('div', { class: 'row' }, el('h2', { text: 'Recent builds' }), el('button', { type: 'button', class: 'ghost', text: 'Refresh', onclick: () => refreshRuns(runs) })), runs));
+    view.append(el('section', { class: 'card' }, el('div', { class: 'row' }, el('h2', { text: 'Recent builds' }), el('span', { class: 'small muted', text: ISTANBUL }), el('button', { type: 'button', class: 'ghost', text: 'Refresh', onclick: () => refreshRuns(runs) })), runs));
     refreshRuns(runs);
     const hist = rel.slice().reverse();
-    view.append(el('section', { class: 'card' }, el('h2', { text: 'Release history' }), hist.length ? el('div', { class: 'table' }, el('table', {},
+    view.append(el('section', { class: 'card' }, el('h2', { text: 'Release history' }), el('p', { class: 'small muted', text: ISTANBUL }), hist.length ? el('div', { class: 'table' }, el('table', {},
       el('thead', {}, el('tr', {}, ...['Date', 'Game', 'Environment', 'versionCode', 'Package', 'From', ''].map(t => el('th', { text: t })))),
-      el('tbody', {}, ...hist.map(r => el('tr', {}, el('td', { class: 'small', text: r.date }), el('td', { text: r.game }), el('td', {}, chip(r.environment === 'production' ? 'good' : '', r.environment)),
+      el('tbody', {}, ...hist.map(r => el('tr', {}, el('td', { class: 'small', text: full(relDate(r.date)) }), el('td', { text: r.game }), el('td', {}, chip(r.environment === 'production' ? 'good' : '', r.environment)),
         el('td', { class: 'num', text: r.versionCode }), el('td', { class: 'small', text: r.package }), el('td', { class: 'small', text: r.source }),
         el('td', {}, el('a', { href: r.run, target: '_blank', rel: 'noopener noreferrer', text: 'Run' }))))))) : el('p', { class: 'muted', text: 'No releases yet.' })));
   } catch (e) { fail(view, e); }
