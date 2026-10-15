@@ -154,16 +154,32 @@ function storageShim(id, level) {
     'var s={getItem:function(k){return Object.prototype.hasOwnProperty.call(m,k)?m[k]:null},setItem:function(k,v){m[k]=String(v)},removeItem:function(k){delete m[k]},clear:function(){m={}},key:function(i){return Object.keys(m)[i]||null},get length(){return Object.keys(m).length}};' +
     'try{Object.defineProperty(window,"localStorage",{value:s,configurable:true})}catch(e){}})();<\/script>\n';
 }
+// the kit's screens on request (art previews): the page listens to this page only, and only for these names
+const SCREEN_SCRIPT = '<script>(function(){var lvl=function(){DK.pop.close();if(DK.game&&DK.game.stop)DK.game.stop();DK.screen.show("home");DK.store.set("progress",{next:14});DK.economy._set({lives:5});DK.flow.play();setTimeout(function(){DK.pop.close();},50);};' +
+  'var A={home:function(){DK.pop.close();if(DK.game&&DK.game.stop)DK.game.stop();DK.screen.show("home");},settings:function(){A.home();DK.settingsUI.open(false);},level:lvl,' +
+  'paused:function(){lvl();setTimeout(function(){DK.flow.pause();},120);},booster:function(){lvl();setTimeout(function(){var c={};DK.boosters.list().forEach(function(b){c[b.id]=0;});DK.store.set("boosters",c);var b=DK.boosters.list()[0];if(b)DK.boosters.use(b.id);},120);},' +
+  'fail:function(){lvl();setTimeout(function(){DK.flow.failed({reason:"Out of moves!",offer:"Play On: 5 more moves"});},120);},' +
+  'fail2:function(){A.fail();setTimeout(function(){var x=document.querySelector("#dk-pops .dk-panel > .dk-round.x");if(x)x.click();},300);},' +
+  'failed:function(){A.fail2();setTimeout(function(){var x=document.querySelector("#dk-pops .dk-panel > .dk-round.x");if(x)x.click();},600);},' +
+  'win:function(){lvl();setTimeout(function(){DK.flow.won();},120);},nolives:function(){A.home();DK.economy._set({lives:0});DK.flow.play();}};' +
+  'addEventListener("message",function(e){if(e.source!==parent||typeof e.data!=="object"||!e.data||e.data.desk!=="screen"||!A.hasOwnProperty(e.data.name))return;try{A[e.data.name]();}catch(x){}});})();<\/script>\n';
 function showGame() {
   const lvl = Math.max(1, parseInt($('#player-level').value, 10) || 1);
-  $('#player-frame').srcdoc = playing.page.replace('<head>\n', () => '<head>\n' + storageShim(playing.id, lvl));
+  let page = playing.page.replace('<head>\n', () => '<head>\n' + storageShim(playing.id, lvl));
+  if (playing.screens) page = page.replace(/<\/body>\n<\/html>\n$/, () => SCREEN_SCRIPT + '</body>\n</html>\n');
+  $('#player-frame').srcdoc = page;
 }
-async function play(title, makePage) {
+$('#player-screen').addEventListener('change', e => {
+  const v = e.target.value; e.target.value = '';
+  if (v && playing) $('#player-frame').contentWindow.postMessage({ desk: 'screen', name: v }, '*');
+});
+async function play(title, makePage, opts) {
   $('#player').hidden = false; $('#player-title').textContent = title; $('#player-msg').textContent = 'Building the game from GitHub…';
   $('#player-frame').srcdoc = '<p style="font:14px system-ui;color:#999;padding:16px">Building…</p>';
   try {
     const { page, cfg } = await makePage();
-    playing = { title, page, id: cfg.id };
+    playing = { title, page, id: cfg.id, screens: !!(opts && opts.screens) };
+    $('#player-screen').hidden = !playing.screens;
     $('#player-msg').textContent = cfg.title + ' · built in this browser from GitHub · progress is not saved';
     showGame();
   } catch (e) { $('#player-msg').textContent = ''; $('#player-frame').srcdoc = '<p style="font:14px system-ui;color:#f88;padding:16px">' + esc(e.message || e) + '</p>'; }
@@ -259,7 +275,7 @@ async function submissionView(n) {
     if (k.kind === 'art') act.append(el('button', { type: 'button', text: 'Preview the art on the kit screens', onclick: () => play('Art preview: ' + p.title, async () => {
       const kit = await S.gh.reader(S.factory, p.head.sha, 'kit'), starter = await S.gh.reader(S.factory, p.head.sha, 'templates/starter');
       return buildGame(kit, starter, { bots: false });
-    }) }));
+    }, { screens: true }) }));
     if (open && S.admin) {
       const green = check.state === 'green';
       act.append(el('button', { type: 'button', text: 'Approve and merge', disabled: !green, title: green ? '' : 'Only a green submission can be approved', onclick: () => confirmBox(msg, 'Merge "' + p.title + '" into main? It becomes part of the factory.', 'Merge', async () => {
@@ -525,7 +541,7 @@ async function artView() {
         el('div', { class: 'row' }, propose, el('button', { type: 'button', class: 'ghost', text: 'Preview on the kit screens', onclick: () => play('Art preview', async () => {
           const starter = await S.gh.reader(S.factory, sha, 'templates/starter');
           return buildGame(overlay(kit), starter, { bots: false });
-        }) })), status);
+        }, { screens: true }) })), status);
     };
     // the kit with the staged changes on top (for the preview)
     const overlay = base => ({
@@ -600,6 +616,38 @@ async function artView() {
       return el('label', { for: 'c-' + k }, i, k);
     });
     view.append(el('section', { class: 'card' + (staged.has('theme.json') ? ' staged' : '') }, el('h2', { text: 'Colors' }), el('p', { class: 'small muted', text: 'The default colors of every game (a game can change its own).' }), el('div', { class: 'colors' }, ...colorInputs)));
+    // UI skin: every element the kit draws can take a picture (kit/core/skin.json)
+    const SK = JSON.parse(await kit.text('core/skin.json'));
+    const live = p => staged.has(p) ? !!staged.get(p).bytes : current.includes(p);
+    const fileOf = base => [...staged.keys()].find(k => k.startsWith('skin/' + base + '.') && staged.get(k).bytes) || current.find(k => k.startsWith('skin/' + base + '.') && live(k));
+    const kindText = sl => sl.kind === 'nine' ? '9-slice, corners ' + sl.slice.join(' / ') + ' px' : sl.kind === 'lottie' ? 'Lottie (.json), at most ' + sl.maxSeconds + ' s' : sl.kind === 'pieces' ? 'up to ' + sl.count + ' pictures' : sl.kind;
+    const skinCard = async (sl, base, label) => {
+      const f = fileOf(base), changed = [...staged.keys()].some(k => k.startsWith('skin/' + base + '.'));
+      let shown;
+      if (sl.kind === 'lottie') shown = el('span', { class: 'small muted', text: f ? 'Animation set (' + f.split('/')[1] + ')' : 'Drawn by the kit (confetti only)' });
+      else if (f) {
+        const box = el('div', { class: 'skin-thumb' }, el('img', { alt: label, src: await urlOf(f) }));
+        if (sl.kind === 'nine') { const [t, r, b, l] = sl.slice, [w, h] = sl.size; box.append(el('i', { class: 'g h', style: 'top:' + (t / h * 100) + '%' }), el('i', { class: 'g h', style: 'top:' + (100 - b / h * 100) + '%' }), el('i', { class: 'g v', style: 'left:' + (l / w * 100) + '%' }), el('i', { class: 'g v', style: 'left:' + (100 - r / w * 100) + '%' })); }
+        shown = box;
+      } else shown = el('span', { class: 'small muted', text: 'Drawn by the kit' });
+      const reset = f ? el('button', { type: 'button', class: 'link small', text: 'Back to the kit\'s look', onclick: () => { for (const k of current.filter(k => k.startsWith('skin/' + base + '.'))) staged.set(k, { bytes: null, label }); for (const k of [...staged.keys()]) if (k.startsWith('skin/' + base + '.') && staged.get(k).bytes) staged.delete(k); again(); } }) : null;
+      return el('div', { class: 'art-item skin' + (changed ? ' staged' : '') }, el('div', { class: 'swatch skin-swatch' }, shown),
+        el('div', { class: 'nm', text: label }), el('div', { class: 'small muted', text: sl.size.join(' x ') + ' · ' + kindText(sl) }),
+        ...picker({ kind: 'skin', slot: sl, file: base }, sl.kind === 'lottie' ? '.json,application/json' : 'image/*', label), reset);
+    };
+    const groups = [...new Set(SK.slots.map(sl => sl.group))];
+    const skinSec = el('section', { class: 'card' }, el('h2', { text: 'UI skin' }),
+      el('p', { class: 'small muted', text: 'Every element the kit draws can take a picture instead. A master of any size works if it has the same proportions as the slot; it is scaled to the exact size. 9-slice: the corners stay as drawn (dashed lines), the edges and the middle stretch. Remove a picture to go back to the kit\'s drawn look.' }));
+    for (const g of groups) {
+      const items = [];
+      for (const sl of SK.slots.filter(x => x.group === g)) {
+        if (sl.kind === 'pieces') { for (let i = 1; i <= sl.count; i++) items.push(await skinCard(sl, sl.id + '-' + i, sl.title.replace(/ pieces$/, ' piece') + ' ' + i)); }
+        else items.push(await skinCard(sl, sl.id, sl.title));
+      }
+      skinSec.append(el('h3', { text: g }), el('div', { class: 'art-grid' }, ...items));
+    }
+    skinSec.append(el('p', { class: 'small muted', text: 'Tip: "Preview on the kit screens" has a Show menu to jump to any screen (settings, a level, popups, the fail steps, the win screen).' }));
+    view.append(skinSec);
     view.append(tray); renderTray();
   } catch (e) { fail(view, e); }
 }

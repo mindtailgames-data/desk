@@ -143,3 +143,13 @@ details summary { cursor: pointer; font-weight: 600; }
   nav { order: 3; flex: 0 0 100%; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; margin: 0 -4px; }
   nav a { white-space: nowrap; }
 }
+
+/* skin slots on the Art page */
+.skin-swatch { background: repeating-conic-gradient(var(--sunk) 0 25%, var(--surface) 0 50%) 0 0 / 14px 14px; height: 96px; padding: 6px; }
+.skin-thumb { position: relative; max-width: 100%; max-height: 100%; display: inline-block; line-height: 0; }
+.skin-thumb img { width: auto; height: auto; max-width: 100%; max-height: 84px; object-fit: contain; }
+.skin-thumb .g { position: absolute; pointer-events: none; border-color: #ff2fa0; border-style: dashed; border-width: 0; }
+.skin-thumb .g.h { left: 0; right: 0; border-top-width: 1px; }
+.skin-thumb .g.v { top: 0; bottom: 0; border-left-width: 1px; }
+.art-item.skin .nm { font-size: 13px; }
+#player-screen { width: auto; }

@@ -97,5 +97,42 @@ export async function prepare(slot, file, M, current) {
     const bytes = new Uint8Array(await file.arrayBuffer());
     return { path, bytes, preview: URL.createObjectURL(new Blob([bytes], { type: ext === 'mp3' ? 'audio/mpeg' : 'audio/ogg' })), remove: others, note: ext.toUpperCase() + ', ' + Math.round(file.size / 1024) + ' KB' };
   }
+  if (slot.kind === 'skin') return prepareSkin(slot.slot, slot.file || slot.slot.id, file, current);
   throw new Error('Unknown art slot.');
+}
+
+// The Lottie rules (the same as the factory's checker): returns the problems, [] when it is fine
+export function checkLottie(text, slot) {
+  let a; try { a = JSON.parse(text); } catch (e) { return ['not valid JSON']; }
+  if (!a || !a.v || !a.fr || a.op == null || a.ip == null || !Array.isArray(a.layers)) return ['not a Lottie animation (export it with Bodymovin or LottieFiles)'];
+  const bad = [];
+  if (a.w !== slot.size[0] || a.h !== slot.size[1]) bad.push('composition ' + a.w + ' x ' + a.h + ' (must be ' + slot.size.join(' x ') + ')');
+  const secs = (a.op - a.ip) / a.fr; if (secs > slot.maxSeconds) bad.push(secs.toFixed(1) + ' seconds (at most ' + slot.maxSeconds + ')');
+  for (const as of a.assets || []) if (as.p && !(as.e === 1 || String(as.p).startsWith('data:'))) bad.push('the picture "' + as.p + '" is not embedded (export with images included in the JSON)');
+  let expr = 0; (function scan(o) { if (Array.isArray(o)) o.forEach(scan); else if (o && typeof o === 'object') for (const k in o) { if (k === 'x' && typeof o[k] === 'string') expr++; else scan(o[k]); } })(a);
+  if (expr) bad.push(expr + ' expression(s): the game\'s player ignores expressions, so bake them into keyframes');
+  if (/<\/script/i.test(text)) bad.push('contains </script');
+  return bad;
+}
+
+// One skin slot (kit/core/skin.json): the master is scaled to the slot's exact size
+async function prepareSkin(slot, base, file, current) {
+  const name = file.name, ext = (name.split('.').pop() || '').toLowerCase(), [w, h] = slot.size;
+  const others = p => current.filter(c => c.startsWith('skin/' + base + '.') && c !== p);
+  if (slot.kind === 'lottie') {
+    const text = await file.text(), bad = checkLottie(text, slot);
+    if (file.size > slot.maxBytes) bad.push(Math.round(file.size / 1024) + ' KB (at most ' + Math.round(slot.maxBytes / 1000) + ' KB): fewer layers or smaller embedded pictures');
+    if (bad.length) throw new Error(name + ': ' + bad.join('; ') + '.');
+    const a = JSON.parse(text), path = 'skin/' + base + '.json';
+    return { path, bytes: new TextEncoder().encode(text.trim() + '\n'), remove: others(path), note: 'Lottie, ' + ((a.op - a.ip) / a.fr).toFixed(1) + ' s, ' + Math.round(file.size / 1024) + ' KB' };
+  }
+  const img = await bitmap(file), ratio = img.width / img.height, want = w / h;
+  const fit = slot.kind === 'cover' ? 'cover' : (slot.kind === 'contain' || slot.kind === 'pieces') ? 'contain' : null;
+  if (!fit && Math.abs(ratio - want) / want > 0.02)
+    throw new Error(name + ': ' + img.width + ' x ' + img.height + ' has other proportions than the slot (' + w + ' x ' + h + '). Draw it at ' + w + ' x ' + h + ' or a multiple (for example ' + (w * 2) + ' x ' + (h * 2) + '), so the corners keep their shape.');
+  const c = fit ? draw(img, w, h, fit) : draw(img, w, h, 'cover');
+  const out = await encode(c, slot.maxBytes);
+  const path = 'skin/' + base + '.' + out.ext;
+  return { path, bytes: await bytesOf(out.blob), preview: URL.createObjectURL(out.blob), remove: others(path),
+    note: img.width + ' x ' + img.height + ' → ' + w + ' x ' + h + ' ' + out.ext.toUpperCase() + ', ' + Math.round(out.blob.size / 1024) + ' KB' };
 }
