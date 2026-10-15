@@ -424,10 +424,10 @@ async function reviewSubmission(files, out) {
 async function buildsView() {
   const view = cur;
   if (!S.canBuild) { page(view, 'Builds', ''); view.append(note('warn', 'Builds need the release repository. Only the owner has access to it.')); return; }
-  page(view, 'Builds', 'Start a signed Android build and follow it. The links are asked for every build.');
+  page(view, 'Builds', 'Start a signed Android build and follow it. The links start from defaults.json in the release repository; check them before each build.');
   loading(view);
   try {
-    const [list, rel, open] = await Promise.all([games(), releases(), prs('open')]);
+    const [list, rel, open, defaults] = await Promise.all([games(), releases(), prs('open'), buildDefaults()]);
     view.lastChild.remove();
     const pre = (() => { try { const v = JSON.parse(sessionStorage.getItem('desk.prefill') || 'null'); sessionStorage.removeItem('desk.prefill'); return v; } catch (e) { return null; } })() || {};
     const ids = [...new Set(list.map(g => g.id).concat(pre.game ? [pre.game] : []))];
@@ -437,14 +437,18 @@ async function buildsView() {
     if (!ids.length) view.append(note('', 'Nothing to build yet: a game can be built once its submission is approved (or, as a sandbox test, from a green submission).'));
     const game = el('select', { id: 'b-game' }, ...ids.map(id => el('option', { value: id, text: (list.find(g => g.id === id) || { title: id }).title + ' (' + id + ')', selected: id === pre.game })));
     const source = el('select', { id: 'b-source' }), pkg = el('input', { id: 'b-pkg', spellcheck: 'false' });
-    const email = el('input', { id: 'b-email', type: 'email', placeholder: 'support@…' }), terms = el('input', { id: 'b-terms', type: 'url', placeholder: 'https://…' }), privacy = el('input', { id: 'b-privacy', type: 'url', placeholder: 'https://…' });
+    const email = el('input', { id: 'b-email', type: 'text', placeholder: 'https://…', spellcheck: 'false' }), terms = el('input', { id: 'b-terms', type: 'url', placeholder: 'https://…' }), privacy = el('input', { id: 'b-privacy', type: 'url', placeholder: 'https://…' });
     const envS = el('input', { type: 'radio', name: 'env', id: 'b-sandbox', value: 'sandbox', checked: true }), envP = el('input', { type: 'radio', name: 'env', id: 'b-production', value: 'production' });
     const vc = el('input', { id: 'b-vc', type: 'number', min: '1', placeholder: 'auto' });
+    // the links start from the defaults (change them here for one build, or in defaults.json for all)
+    if (typeof defaults.support === 'string') email.value = defaults.support;
+    if (typeof defaults.terms === 'string') terms.value = defaults.terms;
+    if (typeof defaults.privacy === 'string') privacy.value = defaults.privacy;
     const sync = () => {
       const id = game.value, branches = open.filter(p => p.head.ref === 'submit/' + id);
       source.replaceChildren(el('option', { value: 'main', text: 'main (approved)' }), ...branches.map(p => el('option', { value: p.head.ref, text: p.head.ref + ' (submission #' + p.number + ', sandbox only)', selected: p.head.ref === pre.source })));
       const last = rel.filter(r => r.game === id && !/factorytest/.test(r.package)).slice(-1)[0];
-      pkg.value = last ? last.package : 'com.duste.' + id;
+      pkg.value = last ? last.package : (defaults.packagePrefix || 'com.duste.') + id;
       syncEnv();
     };
     const syncEnv = () => { const branch = source.value !== 'main'; envP.disabled = branch; if (branch) envS.checked = true; };
@@ -455,10 +459,10 @@ async function buildsView() {
       const env = envP.checked ? 'production' : 'sandbox';
       const errs = [];
       if (!/^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$/.test(pkg.value.trim())) errs.push('Package name like com.duste.' + game.value);
-      if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email.value.trim())) errs.push('A support e-mail address');
+      if (!/^https:\/\/\S+$/.test(email.value.trim()) && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email.value.trim())) errs.push('A Support link starting with https:// (or an e-mail address)');
       for (const [n, f] of [['Terms', terms], ['Privacy', privacy]]) if (!/^https:\/\/\S+$/.test(f.value.trim())) errs.push(n + ' URL starting with https://');
       if (errs.length) { msg.replaceChildren(note('bad', 'Still needed: ' + errs.join('; ') + '.')); return; }
-      const inputs = { game: game.value, source: source.value, package: pkg.value.trim(), support_email: email.value.trim(), terms_url: terms.value.trim(), privacy_url: privacy.value.trim(), adjust_environment: env };
+      const inputs = { game: game.value, source: source.value, package: pkg.value.trim(), support_url: email.value.trim(), terms_url: terms.value.trim(), privacy_url: privacy.value.trim(), adjust_environment: env };
       if (vc.value) inputs.version_code = String(parseInt(vc.value, 10));
       confirmBox(msg, 'Start a ' + env + ' build of ' + inputs.game + ' from ' + inputs.source + ' as ' + inputs.package + '?' + (env === 'production' ? ' (Production: the Adjust events count in the real numbers.)' : ''), 'Start the build', async () => {
         await S.gh.post(R() + '/actions/workflows/release.yml/dispatches', { ref: 'main', inputs });
@@ -471,9 +475,10 @@ async function buildsView() {
         el('label', { for: 'b-game' }, 'Game', game), el('label', { for: 'b-source' }, 'From', source),
         el('label', { for: 'b-pkg' }, 'Package name (never changes after the first upload)', pkg),
         el('label', { for: 'b-vc' }, 'versionCode (empty: automatic)', vc),
-        el('label', { for: 'b-email' }, 'Support e-mail', email), el('label', { for: 'b-terms' }, 'Terms of use URL', terms), el('label', { for: 'b-privacy' }, 'Privacy policy URL', privacy),
+        el('label', { for: 'b-email' }, 'Support link (the Support button in Settings)', email), el('label', { for: 'b-terms' }, 'Terms of use URL', terms), el('label', { for: 'b-privacy' }, 'Privacy policy URL', privacy),
         el('div', { class: 'stack wide' }, el('span', { class: 'small muted', text: 'Adjust environment' }),
           el('div', { class: 'row' }, el('label', { class: 'inline', for: 'b-sandbox' }, envS, 'Sandbox (testing)'), el('label', { class: 'inline', for: 'b-production' }, envP, 'Production (store; only from main)')))),
+      el('p', { class: 'small muted', text: 'The package name and the three links are filled in for you (package: ' + (defaults.packagePrefix || 'com.duste.') + '<game id>; links: defaults.json in the release repository). Change any of them for this build if needed.' }),
       el('div', { class: 'row' }, start), msg));
     const runs = el('div', { class: 'list' });
     view.append(el('section', { class: 'card' }, el('div', { class: 'row' }, el('h2', { text: 'Recent builds' }), el('span', { class: 'small muted', text: ISTANBUL }), el('button', { type: 'button', class: 'ghost', text: 'Refresh', onclick: () => refreshRuns(runs) })), runs));
@@ -485,6 +490,11 @@ async function buildsView() {
         el('td', { class: 'num', text: r.versionCode }), el('td', { class: 'small', text: r.package }), el('td', { class: 'small', text: r.source }),
         el('td', {}, el('a', { href: r.run, target: '_blank', rel: 'noopener noreferrer', text: 'Run' }))))))) : el('p', { class: 'muted', text: 'No releases yet.' })));
   } catch (e) { fail(view, e); }
+}
+// what a new build's form starts with: defaults.json in the release repository (editable there)
+async function buildDefaults() {
+  try { const rd = await S.gh.reader(S.release, await mainSha(S.release), ''); return rd.has('defaults.json') ? JSON.parse(await rd.text('defaults.json')) : {}; }
+  catch (e) { return {}; }
 }
 async function refreshRuns(box) {
   try {

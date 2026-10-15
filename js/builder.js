@@ -152,7 +152,7 @@ export async function buildGame(kit, game, { links = null, bots = true } = {}) {
   const gameJs = pyText(await game.text('game.js'));
   const gameCss = files.includes('game.css') ? pyText(await game.text('game.css')) : '';
   const botJs = bots && files.includes('bot.js') ? pyText(await game.text('bot.js')) : null;
-  cfg.links = links || { supportEmail: '', terms: '', privacy: '' };
+  cfg.links = links || { support: '', terms: '', privacy: '' };
   if (!('analytics' in cfg)) { const a = []; for (let n = 10; n <= levels.length; n += 10) a.push(n); cfg.analytics = { levelAchieved: a }; }
   const wrap = code => '(function () {\n' + code + '\n})();';
   const scripts = [['dk-game', wrap(gameJs)]];
