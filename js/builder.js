@@ -55,6 +55,54 @@ export async function loadArt(kit) {
   return { icons, sounds, music: music ? dataUri(music, await kit.bytes(music)) : null,
     theme: themeFile ? JSON.parse(await kit.text('art/theme.json')) : {} };
 }
+async function firstPicture(kit, folder, name) {
+  const f = await first(kit, folder, name);
+  return f && ['png', 'webp'].includes(ext(f)) ? f : null;
+}
+// a number for CSS: at most 3 decimals, no trailing zeros (the same text as the factory's Python build)
+export const num = v => { const s = v.toFixed(3).replace(/0+$/, ''); return s.endsWith('.') ? s.slice(0, -1) : s; };
+const SKIN_DECL = {
+  stretch: u => 'background:url(' + u + ') center/100% 100% no-repeat;',
+  contain: u => 'background:url(' + u + ') center/contain no-repeat;',
+  cover: u => 'background:url(' + u + ') center/cover no-repeat;',
+  'tile-y': u => 'background:url(' + u + ') center top/100% auto repeat-y;'
+};
+// the UI skin (kit/core/skin.json): { css, art: {confetti} | null, celebration: the animation's JSON text | null, lottie: the player's code or '' }
+export async function loadSkin(kit) {
+  const spec = JSON.parse(await kit.text('core/skin.json'));
+  const unit = px => 'calc(var(--u)*' + num(px * 100 / spec.reference) + ')';
+  const rules = [], extra = {};
+  const skinFiles = await kit.list('art/skin');
+  for (const slot of spec.slots) {
+    const k = slot.kind;
+    if (k === 'pieces') {
+      const pieces = [];
+      for (let i = 1; i <= slot.count; i++) { const f = await firstPicture(kit, 'skin', slot.id + '-' + i); if (f) pieces.push(dataUri(f, await kit.bytes(f))); }
+      if (pieces.length) extra.confetti = pieces;
+      continue;
+    }
+    if (k === 'lottie') {
+      if (skinFiles.includes(slot.id + '.json')) {   // into the page as the art team made it (checked as JSON first)
+        const raw = pyText(await kit.text('art/skin/' + slot.id + '.json')).trim();
+        JSON.parse(raw);
+        if (raw.toLowerCase().includes('</script')) throw new Error('kit/art/skin/' + slot.id + '.json contains </script');
+        extra.celebration = raw;
+      }
+      continue;
+    }
+    const f = await firstPicture(kit, 'skin', slot.id);
+    if (!f) continue;
+    const uri = dataUri(f, await kit.bytes(f));
+    let decl;
+    if (k === 'nine') { const [t, r, b, l] = slot.slice; decl = 'border-image-source:url(' + uri + ');border-image-slice:' + t + ' ' + r + ' ' + b + ' ' + l + ' fill;border-image-width:' + [t, r, b, l].map(unit).join(' ') + ';border-image-repeat:stretch;'; }
+    else decl = SKIN_DECL[k](uri);
+    rules.push(slot.selector + '{' + (slot.css || '') + decl + '}' + (slot.extra || ''));
+  }
+  const celebration = extra.celebration || null; delete extra.celebration;
+  return { css: rules.join('\n'), art: Object.keys(extra).length ? extra : null, celebration,
+    lottie: celebration ? pyText(await kit.text('vendor/lottie_light_canvas.min.js')) : '' };
+}
+
 export async function splashBackground(kit) {
   let bg = null;
   if ((await kit.list('art/splash')).includes('splash.json')) bg = JSON.parse(await kit.text('art/splash/splash.json')).background;
@@ -75,14 +123,19 @@ export async function buildPage(kit, cfg, { levels = null, gameCss = '', gameHtm
   const fontB64 = base64(await kit.bytes(font)), splashUri = dataUri(splash, await kit.bytes(splash)), splashBg = await splashBackground(kit);
   const css = pyText(await kit.text('core/kit.css')).replaceAll('/*FONT*/', () => fontB64)
     .replaceAll('/*STUDIO_SPLASH*/', () => splashUri).replaceAll('/*SPLASH_BG*/', () => splashBg);
-  let js = pyText(await kit.text('core/kit.js'));
+  const skin = await loadSkin(kit);
+  let cssAll = css;
+  if (skin.css) cssAll += '\n' + skin.css;
+  if (skin.art) art.skin = skin.art;
+  let js = (skin.lottie ? skin.lottie + '\n' : '') + pyText(await kit.text('core/kit.js'));
   for (const m of ORDER) if (mods[m]) js += pyText(await kit.text('modules/' + m + '.js'));
   for (const [, code] of gameScripts) if (code.toLowerCase().includes('</script')) throw new Error('a game script contains </script');
   let pre = 'window.DK_ART = ' + pyJson(art) + ';\n';
+  if (skin.celebration) pre += 'window.DK_CELEBRATION = ' + skin.celebration + ';\n';
   if (levels !== null) pre += 'window.DK_LEVELS = ' + pyJson(levels) + ';\n';
   return '<!DOCTYPE html>\n<html lang="en">\n<head>\n<meta charset="utf-8">\n' +
     '<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">\n' +
-    '<meta name="theme-color" content="' + (theme.bg2 || '#2c2560') + '">\n<title>' + cfg.title + '</title>\n<style>\n' + css + '\n' + gameCss + '\n</style>\n</head>\n<body>\n' +
+    '<meta name="theme-color" content="' + (theme.bg2 || '#2c2560') + '">\n<title>' + cfg.title + '</title>\n<style>\n' + cssAll + '\n' + gameCss + '\n</style>\n</head>\n<body>\n' +
     '<div id="dk-frame"><div id="dk-game" class="dk-layer">' + gameHtml + '</div><div id="dk-screens" class="dk-layer"></div>' +
     '<div id="dk-pops" class="dk-layer" style="pointer-events:none"></div><div id="dk-toast" class="dk-hidden"></div></div>\n' +
     '<script>\n' + pre + '</script>\n<script>\n' + js + '\n</script>\n' +
