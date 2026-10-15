@@ -403,6 +403,9 @@ async function buildsView() {
     view.lastChild.remove();
     const pre = (() => { try { const v = JSON.parse(sessionStorage.getItem('desk.prefill') || 'null'); sessionStorage.removeItem('desk.prefill'); return v; } catch (e) { return null; } })() || {};
     const ids = [...new Set(list.map(g => g.id).concat(pre.game ? [pre.game] : []))];
+    if (pre.game && !list.some(g => g.id === pre.game)) {   // a game that is only in a submission: its title from the branch
+      try { const br = open.find(p => p.head.ref === pre.source); if (br) list.push({ id: pre.game, title: JSON.parse(await (await S.gh.reader(S.factory, br.head.sha, 'games/' + pre.game)).text('game.json')).title }); } catch (e) {}
+    }
     if (!ids.length) view.append(note('', 'Nothing to build yet: a game can be built once its submission is approved (or, as a sandbox test, from a green submission).'));
     const game = el('select', { id: 'b-game' }, ...ids.map(id => el('option', { value: id, text: (list.find(g => g.id === id) || { title: id }).title + ' (' + id + ')', selected: id === pre.game })));
     const source = el('select', { id: 'b-source' }), pkg = el('input', { id: 'b-pkg', spellcheck: 'false' });
