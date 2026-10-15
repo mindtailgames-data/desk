@@ -195,6 +195,28 @@ async function gamePage(gameSha, id, kitOverlay) {
   return buildGame(kit, game, { bots: false });
 }
 
+// ---------- downloads: the "downloads" branch of a repository (test apps of submissions; files of release builds) ----------
+async function downloadsReader(repo) {
+  try { return await S.gh.reader(repo, (await S.gh.get('/repos/' + repo + '/git/ref/heads/downloads')).object.sha, ''); }
+  catch (e) { if (e.status === 404) return null; throw e; }
+}
+const MIME = { apk: 'application/vnd.android.package-archive', aab: 'application/octet-stream', html: 'text/html', md: 'text/markdown', png: 'image/png', jpg: 'image/jpeg', json: 'application/json' };
+// a file from a downloads branch, saved by the browser under `name`
+async function saveFile(dl, filePath, name, btn) {
+  const label = btn && btn.textContent;
+  try {
+    if (btn) { btn.disabled = true; btn.textContent = 'Downloading…'; }
+    const bytes = await dl.bytes(filePath);
+    const url = URL.createObjectURL(new Blob([bytes], { type: MIME[name.split('.').pop()] || 'application/octet-stream' }));
+    const a = el('a', { href: url, download: name }); document.body.append(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+  } catch (e) { alertNote(btn, e.message); }
+  finally { if (btn) { btn.disabled = false; btn.textContent = label; } }
+}
+function alertNote(near, msg) { if (near && near.parentNode) near.parentNode.append(note('bad', msg)); }
+const dlButton = (dl, filePath, name, text, cls) => { const b = el('button', { type: 'button', class: cls || 'ghost', text }); b.addEventListener('click', () => saveFile(dl, filePath, name, b)); return b; };
+const fileSize = (dl, p) => { const e = dl.entry(p); return e && e.size ? ' · ' + (e.size > 1e6 ? (e.size / 1e6).toFixed(1) + ' MB' : Math.round(e.size / 1024) + ' KB') : ''; };
+
 // ---------- Dashboard ----------
 async function dashboardView() {
   const view = cur;
@@ -287,8 +309,22 @@ async function submissionView(n) {
       if (k.kind === 'game' && green && S.canBuild) act.append(el('a', { href: '#builds', onclick: () => { try { sessionStorage.setItem('desk.prefill', JSON.stringify({ game: k.id, source: p.head.ref })); } catch (e) {} }, text: 'Sandbox build from this branch' }));
     }
     view.append(el('section', { class: 'card' }, act, msg,
-      check.state === 'running' ? note('', 'The factory check is running (usually 4–6 minutes). Reload this page to see the result.') : null,
+      check.state === 'running' ? note('', 'The factory check is running, then the test app is built (about 10 minutes in all). Reload this page to see the result.') : null,
       open && check.state === 'red' ? note('bad', S.admin ? 'Not green: decline it with a short note, or wait for the submitter to fix it.' : 'Not green yet: fix what the report says and submit again. Your submission updates in place.') : null));
+    if (k.kind === 'game') {
+      const dl = await downloadsReader(S.factory).catch(() => null), dir = 'pr-' + n + '/';
+      const info = dl && dl.has(dir + 'info.json') ? JSON.parse(await dl.text(dir + 'info.json')) : null;
+      const box = el('section', { class: 'card' }, el('h2', { text: 'Test app' }));
+      if (info && dl.has(dir + info.game + '-test.apk')) {
+        const current = info.sha === p.head.sha;
+        box.append(current ? el('p', { class: 'small muted', text: 'Built from this version on ' + full(relDate(info.date)) + ' (Istanbul).' }) : note('warn', 'These files are from an earlier version of this submission (' + full(relDate(info.date)) + '). The new ones appear when the check of the latest version is green.'),
+          el('div', { class: 'row' },
+            dlButton(dl, dir + info.game + '-test.apk', info.game + '-test-' + info.sha.slice(0, 7) + '.apk', 'Download the test app (.apk)' + fileSize(dl, dir + info.game + '-test.apk'), ''),
+            dlButton(dl, dir + 'game.html', info.game + '-' + info.sha.slice(0, 7) + '.html', 'Download the game page (.html)' + fileSize(dl, dir + 'game.html'))),
+          el('p', { class: 'small muted', text: 'The .apk installs on an Android phone (allow installing from your browser or files app when asked). It is a test build: signed with a test key, no Adjust, named "' + info.game + '" with the package com.duste.test.' + info.game + ', so it does not touch a store version on the same phone. The .html opens in any browser.' }));
+      } else box.append(el('p', { class: 'muted', text: check.state === 'running' || check.state === 'none' ? 'The test app is built after a green check (about 10 minutes after submitting). Reload this page then.' : check.state === 'red' ? 'Only a green submission gets a test app. Fix what the report says and submit again.' : 'The test app is being built, or its build failed: see the check on GitHub.' }));
+      view.append(box);
+    }
     view.append(el('section', { class: 'card report' }, el('h2', { text: 'Factory check report' }),
       report ? el('div', { html: renderMd(report.body) }) : el('p', { class: 'muted', text: check.state === 'running' ? 'The report appears when the check finishes.' : 'No report yet.' }),
       check.url ? el('a', { href: check.url, target: '_blank', rel: 'noopener noreferrer', text: 'The check on GitHub (logs, test page download)' }) : null));
@@ -484,11 +520,24 @@ async function buildsView() {
     view.append(el('section', { class: 'card' }, el('div', { class: 'row' }, el('h2', { text: 'Recent builds' }), el('span', { class: 'small muted', text: ISTANBUL }), el('button', { type: 'button', class: 'ghost', text: 'Refresh', onclick: () => refreshRuns(runs) })), runs));
     refreshRuns(runs);
     const hist = rel.slice().reverse();
+    const bdl = await downloadsReader(S.release).catch(() => null);
+    const filesOf = r => { const id = String(r.run || '').split('/').pop(), dir = 'run-' + id + '/'; return bdl && bdl.has(dir + 'info.json') ? dir : null; };
+    const buildFiles = (r, dir) => {
+      const all = bdl.paths().filter(x => x.startsWith(dir)).map(x => x.slice(dir.length));
+      const pick = re => all.find(x => re.test(x));
+      const out = el('div', { class: 'row small' });
+      if (all.includes('game.html')) out.append(el('button', { type: 'button', text: 'Play', onclick: () => play(r.game + ' · ' + r.versionCode + ' · ' + r.environment, async () => ({ page: await bdl.text(dir + 'game.html'), cfg: { id: r.game, title: r.game + ' ' + r.versionCode } })) }));
+      for (const [re, label] of [[/\.apk$/, '.apk'], [/\.aab$/, '.aab'], [/^store\/.*icon.*\.png$/, 'Store icon'], [/^store\/.*feature.*\.(jpg|png)$/, 'Feature graphic'], [/^report\.md$/, 'Report']]) {
+        const f = pick(re); if (f) out.append(dlButton(bdl, dir + f, f.split('/').pop(), label + fileSize(bdl, dir + f)));
+      }
+      return out;
+    };
     view.append(el('section', { class: 'card' }, el('h2', { text: 'Release history' }), el('p', { class: 'small muted', text: ISTANBUL }), hist.length ? el('div', { class: 'table' }, el('table', {},
-      el('thead', {}, el('tr', {}, ...['Date', 'Game', 'Environment', 'versionCode', 'Package', 'From', ''].map(t => el('th', { text: t })))),
+      el('thead', {}, el('tr', {}, ...['Date', 'Game', 'Environment', 'versionCode', 'Package', 'From', 'Play and files'].map(t => el('th', { text: t })))),
       el('tbody', {}, ...hist.map(r => el('tr', {}, el('td', { class: 'small', text: full(relDate(r.date)) }), el('td', { text: r.game }), el('td', {}, chip(r.environment === 'production' ? 'good' : '', r.environment)),
         el('td', { class: 'num', text: r.versionCode }), el('td', { class: 'small', text: r.package }), el('td', { class: 'small', text: r.source }),
-        el('td', {}, el('a', { href: r.run, target: '_blank', rel: 'noopener noreferrer', text: 'Run' }))))))) : el('p', { class: 'muted', text: 'No releases yet.' })));
+        el('td', {}, filesOf(r) ? buildFiles(r, filesOf(r)) : el('a', { href: r.run, target: '_blank', rel: 'noopener noreferrer', text: 'On GitHub', title: 'Built before downloads were kept here, or older than the last 12 builds' }))))))) : el('p', { class: 'muted', text: 'No releases yet.' })),
+      el('p', { class: 'small muted', text: 'Play runs the exact game page inside that build. The files of the last 12 builds are kept here.' }));
   } catch (e) { fail(view, e); }
 }
 // what a new build's form starts with: defaults.json in the release repository (editable there)
