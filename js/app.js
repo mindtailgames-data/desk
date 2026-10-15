@@ -157,7 +157,7 @@ function storageShim(id, level) {
 // the kit's screens on request (art previews): the page listens to this page only, and only for these names
 const SCREEN_SCRIPT = '<script>(function(){var lvl=function(){DK.pop.close();if(DK.game&&DK.game.stop)DK.game.stop();DK.screen.show("home");DK.store.set("progress",{next:14});DK.economy._set({lives:5});DK.flow.play();setTimeout(function(){DK.pop.close();},50);};' +
   'var A={home:function(){DK.pop.close();if(DK.game&&DK.game.stop)DK.game.stop();DK.screen.show("home");},settings:function(){A.home();DK.settingsUI.open(false);},level:lvl,' +
-  'paused:function(){lvl();setTimeout(function(){DK.flow.pause();},120);},booster:function(){lvl();setTimeout(function(){var c={};DK.boosters.list().forEach(function(b){c[b.id]=0;});DK.store.set("boosters",c);var b=DK.boosters.list()[0];if(b)DK.boosters.use(b.id);},120);},' +
+  'paused:function(){lvl();setTimeout(function(){DK.flow.pause();},120);},booster:function(){lvl();setTimeout(function(){DK.boosters.list().forEach(function(b){DK.boosters.add(b.id,-DK.boosters.count(b.id));});var b=DK.boosters.list()[0];if(b)DK.boosters.use(b.id);},120);},' +
   'fail:function(){lvl();setTimeout(function(){DK.flow.failed({reason:"Out of moves!",offer:"Play On: 5 more moves"});},120);},' +
   'fail2:function(){A.fail();setTimeout(function(){var x=document.querySelector("#dk-pops .dk-panel > .dk-round.x");if(x)x.click();},300);},' +
   'failed:function(){A.fail2();setTimeout(function(){var x=document.querySelector("#dk-pops .dk-panel > .dk-round.x");if(x)x.click();},600);},' +
@@ -561,9 +561,11 @@ async function refreshRuns(box) {
 // ---------- Art ----------
 let staged = new Map();   // path in kit/art -> { bytes, preview, note, label } ; bytes null = delete
 const again = () => { const y = window.scrollY; fresh(); artView().then(() => window.scrollTo(0, y)); };
+let artPreview = () => {};   // set by the Art page: the starter game with the art pack (and the staged changes)
 async function artView() {
   const view = cur;
-  page(view, 'Art', 'The art every game uses. Replace any file with a master of any size: the website makes the game-ready version, and the change is proposed for approval.');
+  page(view, 'Art', 'The art every game uses. Replace any file with a master of any size: the website makes the game-ready version, and the change is proposed for approval.',
+    el('button', { type: 'button', class: 'ghost', text: 'Preview the current art', onclick: () => artPreview(false) }));
   loading(view);
   try {
     const sha = await mainSha(), kit = await S.gh.reader(S.factory, sha, 'kit');
@@ -612,6 +614,10 @@ async function artView() {
         return [...names];
       }
     });
+    artPreview = () => play(staged.size ? 'Art preview (with your ' + staged.size + ' change' + (staged.size === 1 ? '' : 's') + ')' : 'The current art', async () => {
+      const starter = await S.gh.reader(S.factory, sha, 'templates/starter');
+      return buildGame(overlay(kit), starter, { bots: false });
+    }, { screens: true });
     const stage = (r, label) => { for (const p of r.remove || []) staged.set(p, { bytes: null }); staged.set(r.path, { bytes: r.bytes, preview: r.preview, note: r.note, label }); };
     const picker = (slot, accept, label, after) => {
       const inp = el('input', { type: 'file', accept, hidden: true }), err = el('div', {});
@@ -677,6 +683,7 @@ async function artView() {
     view.append(el('section', { class: 'card' + (staged.has('theme.json') ? ' staged' : '') }, el('h2', { text: 'Colors' }), el('p', { class: 'small muted', text: 'The default colors of every game (a game can change its own).' }), el('div', { class: 'colors' }, ...colorInputs)));
     // UI skin: every element the kit draws can take a picture (kit/core/skin.json)
     const SK = JSON.parse(await kit.text('core/skin.json'));
+    const previews = await downloadsReader(S.factory).catch(() => null);
     const live = p => staged.has(p) ? !!staged.get(p).bytes : current.includes(p);
     const fileOf = base => [...staged.keys()].find(k => k.startsWith('skin/' + base + '.') && staged.get(k).bytes) || current.find(k => k.startsWith('skin/' + base + '.') && live(k));
     const kindText = sl => sl.kind === 'nine' ? '9-slice, corners ' + sl.slice.join(' / ') + ' px' : sl.kind === 'lottie' ? 'Lottie (.json), at most ' + sl.maxSeconds + ' s' : sl.kind === 'pieces' ? 'up to ' + sl.count + ' pictures' : sl.kind;
@@ -688,10 +695,15 @@ async function artView() {
         const box = el('div', { class: 'skin-thumb' }, el('img', { alt: label, src: await urlOf(f) }));
         if (sl.kind === 'nine') { const [t, r, b, l] = sl.slice, [w, h] = sl.size; box.append(el('i', { class: 'g h', style: 'top:' + (t / h * 100) + '%' }), el('i', { class: 'g h', style: 'top:' + (100 - b / h * 100) + '%' }), el('i', { class: 'g v', style: 'left:' + (l / w * 100) + '%' }), el('i', { class: 'g v', style: 'left:' + (100 - r / w * 100) + '%' })); }
         shown = box;
+      } else if (sl.kind !== 'pieces' && previews && previews.has('previews/' + base + '.png')) {
+        // the kit's current drawing of this element, photographed by the factory check (downloads branch)
+        const url = URL.createObjectURL(new Blob([await previews.bytes('previews/' + base + '.png')], { type: 'image/png' }));
+        shown = el('div', { class: 'skin-thumb drawn', title: 'The kit\'s current drawing (no picture yet)' }, el('img', { alt: label + ' (drawn by the kit)', src: url }));
       } else shown = el('span', { class: 'small muted', text: 'Drawn by the kit' });
       const reset = f ? el('button', { type: 'button', class: 'link small', text: 'Back to the kit\'s look', onclick: () => { for (const k of current.filter(k => k.startsWith('skin/' + base + '.'))) staged.set(k, { bytes: null, label }); for (const k of [...staged.keys()]) if (k.startsWith('skin/' + base + '.') && staged.get(k).bytes) staged.delete(k); again(); } }) : null;
       return el('div', { class: 'art-item skin' + (changed ? ' staged' : '') }, el('div', { class: 'swatch skin-swatch' }, shown),
         el('div', { class: 'nm', text: label }), el('div', { class: 'small muted', text: sl.size.join(' x ') + ' · ' + kindText(sl) }),
+        f ? null : el('div', { class: 'small muted', text: sl.kind === 'lottie' || sl.kind === 'pieces' ? 'No picture: the kit\'s default' : 'No picture yet: the kit\'s drawing (above)' }),
         ...picker({ kind: 'skin', slot: sl, file: base }, sl.kind === 'lottie' ? '.json,application/json' : 'image/*', label), reset);
     };
     const groups = [...new Set(SK.slots.map(sl => sl.group))];
