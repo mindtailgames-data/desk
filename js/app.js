@@ -358,6 +358,12 @@ async function reviewSubmission(files, out) {
   const id = cfg && cfg.id;
   const [open, sha] = await Promise.all([prs('open'), mainSha()]);
   const mine = id ? open.find(p => p.head.ref === 'submit/' + id) : null;
+  // a declined submission of the same game: the resubmission reopens it (same history, same notes)
+  const declined = id && !mine ? (await S.gh.get(F() + '/pulls?state=closed&per_page=10&head=' + encodeURIComponent(S.factory.split('/')[0] + ':submit/' + id))).find(p => !p.merged_at) : null;
+  const earlier = mine || declined;
+  // an id is one game: a teammate cannot overwrite someone else's submission (the owner can, after a warning)
+  const taken = earlier && earlier.user.login !== S.user.login ? earlier.user.login : null;
+  if (taken && !S.admin) problems.push('the id "' + id + '" is used by ' + taken + '\'s submission #' + earlier.number + '. Use your own id in game.json (and the folder name), or ask ' + taken + '.');
   const onMain = id ? (await S.gh.reader(S.factory, sha, '')).has('games/' + id + '/game.json') : false;
   const total = files.reduce((s, f) => s + f.file.size, 0);
   out.replaceChildren();
@@ -365,11 +371,13 @@ async function reviewSubmission(files, out) {
     el('div', { class: 'row' }, el('h2', { text: cfg && cfg.title ? cfg.title : 'Your folder' }), id ? el('span', { class: 'tag', text: id }) : null,
       levels ? el('span', { class: 'muted small', text: levels.length + ' levels' }) : null, el('span', { class: 'muted small', text: files.length + ' files · ' + Math.round(total / 1024) + ' KB' })),
     problems.length ? note('bad', el('div', { class: 'stack' }, el('strong', { text: 'Fix these before submitting:' }), el('ul', {}, ...problems.map(p => el('li', { text: p }))))) : note('good', 'The basics look right. The full factory check runs after you submit.'),
-    mine ? note('', 'This updates your open submission #' + mine.number + ' (the report updates too).') : onMain ? note('warn', 'A game with the id "' + id + '" is already on main: this submission updates it.') : null,
+    taken && S.admin ? note('warn', 'This id belongs to ' + taken + '\'s submission #' + earlier.number + ': submitting changes their submission.') : null,
+    mine ? note('', 'This updates the open submission #' + mine.number + ' (the report updates too).') : declined ? note('', 'This resubmits the declined submission #' + declined.number + ' and reopens it (its notes stay).') : null,
+    onMain ? note('warn', 'A game with the id "' + id + '" is already on main: this submission updates it.') : null,
     el('div', { class: 'files' }, ...files.map(f => el('div', { text: f.rel })))));
   if (problems.length) return;
   const status = el('div', { class: 'stack' });
-  const go = el('button', { type: 'button', text: mine ? 'Update submission #' + mine.number : 'Submit' });
+  const go = el('button', { type: 'button', text: mine ? 'Update submission #' + mine.number : declined ? 'Resubmit #' + declined.number : 'Submit' });
   const tryIt = el('button', { type: 'button', class: 'ghost', text: 'Play it here first', onclick: () => play(cfg.title + ' (your folder)', async () => {
     const kit = await S.gh.reader(S.factory, await mainSha(), 'kit'); return buildGame(kit, localReader(files), { bots: false });
   }) });
@@ -385,8 +393,12 @@ async function reviewSubmission(files, out) {
       const remove = current.filter(p => !keep.has(p) && !SKIP.test(p)).map(p => dir + p);
       const c = await S.gh.commitFiles(S.factory, branch, { base: 'main', message: (mine ? 'Update ' : 'Submit ') + cfg.title + ' (' + id + ')', write, remove });
       let pr = mine;
+      if (!pr && declined) {
+        try { pr = await S.gh.patch(F() + '/pulls/' + declined.number, { state: 'open' }); await S.gh.post(F() + '/issues/' + declined.number + '/comments', { body: 'Resubmitted from Desk by @' + S.user.login + ' (' + c.sha.slice(0, 7) + ').' }); }
+        catch (e) { pr = null; }   // (it cannot be reopened, e.g. its branch was deleted: a new submission is opened instead)
+      }
       if (!pr) pr = await S.gh.post(F() + '/pulls', { title: 'Game: ' + cfg.title, head: branch, base: 'main', body: 'Submitted from Desk by @' + S.user.login + '.\n\n' + levels.length + ' levels, ' + files.length + ' files.' });
-      status.replaceChildren(note('good', el('div', { class: 'stack' }, el('span', { text: (mine ? 'Updated' : 'Submitted') + ' (' + c.sha.slice(0, 7) + '). The factory check starts in a moment and takes about 5 minutes.' }), el('a', { href: '#submission/' + pr.number, text: 'Open submission #' + pr.number }))));
+      status.replaceChildren(note('good', el('div', { class: 'stack' }, el('span', { text: (mine ? 'Updated' : declined && pr.number === declined.number ? 'Resubmitted and reopened' : 'Submitted') + ' (' + c.sha.slice(0, 7) + '). The factory check starts in a moment and takes about 5 minutes.' }), el('a', { href: '#submission/' + pr.number, text: 'Open submission #' + pr.number }))));
     } catch (e) { status.replaceChildren(note('bad', e.message)); go.disabled = false; }
   });
   out.append(el('section', { class: 'card' }, el('div', { class: 'row' }, go, tryIt), status));
