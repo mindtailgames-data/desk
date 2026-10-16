@@ -476,7 +476,6 @@ async function buildsView() {
     const email = el('input', { id: 'b-email', type: 'text', placeholder: 'https://…', spellcheck: 'false' }), terms = el('input', { id: 'b-terms', type: 'url', placeholder: 'https://…' }), privacy = el('input', { id: 'b-privacy', type: 'url', placeholder: 'https://…' });
     const envS = el('input', { type: 'radio', name: 'env', id: 'b-sandbox', value: 'sandbox', checked: true }), envP = el('input', { type: 'radio', name: 'env', id: 'b-production', value: 'production' });
     const vc = el('input', { id: 'b-vc', type: 'number', min: '1', placeholder: 'auto' });
-    const whats = el('textarea', { id: 'b-whats', rows: 3, placeholder: 'One change per line, for players (e.g. "20 new levels"). Empty for a first release.' });
     // the links start from the defaults (change them here for one build, or in defaults.json for all)
     if (typeof defaults.support === 'string') email.value = defaults.support;
     if (typeof defaults.terms === 'string') terms.value = defaults.terms;
@@ -498,12 +497,9 @@ async function buildsView() {
       if (!/^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$/.test(pkg.value.trim())) errs.push('Package name like com.duste.' + game.value);
       if (!/^https:\/\/\S+$/.test(email.value.trim()) && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email.value.trim())) errs.push('A Support link starting with https:// (or an e-mail address)');
       for (const [n, f] of [['Terms', terms], ['Privacy', privacy]]) if (!/^https:\/\/\S+$/.test(f.value.trim())) errs.push(n + ' URL starting with https://');
-      const notes = whats.value.split('\n').map(l => l.trim()).filter(Boolean).join('\n');
-      if (notes.length > 500) errs.push("What's new: at most 500 characters (now " + notes.length + ')');
       if (errs.length) { msg.replaceChildren(note('bad', 'Still needed: ' + errs.join('; ') + '.')); return; }
       const inputs = { game: game.value, source: source.value, package: pkg.value.trim(), support_url: email.value.trim(), terms_url: terms.value.trim(), privacy_url: privacy.value.trim(), adjust_environment: env };
       if (vc.value) inputs.version_code = String(parseInt(vc.value, 10));
-      if (notes) inputs.whats_new = notes;
       confirmBox(msg, 'Start a ' + env + ' build of ' + inputs.game + ' from ' + inputs.source + ' as ' + inputs.package + '?' + (env === 'production' ? ' (Production: the Adjust events count in the real numbers.)' : ''), 'Start the build', async () => {
         await S.gh.post(R() + '/actions/workflows/release.yml/dispatches', { ref: 'main', inputs });
         msg.replaceChildren(note('good', 'Started. It appears in the list below within a few seconds and takes about 10–15 minutes.'));
@@ -516,7 +512,6 @@ async function buildsView() {
         el('label', { for: 'b-pkg' }, 'Package name (never changes after the first upload)', pkg),
         el('label', { for: 'b-vc' }, 'versionCode (empty: automatic)', vc),
         el('label', { for: 'b-email' }, 'Support link (the Support button in Settings)', email), el('label', { for: 'b-terms' }, 'Terms of use URL', terms), el('label', { for: 'b-privacy' }, 'Privacy policy URL', privacy),
-        el('label', { for: 'b-whats', class: 'wide' }, "What's new for players (Google Play's release notes; also goes to the store pipeline)", whats),
         el('div', { class: 'stack wide' }, el('span', { class: 'small muted', text: 'Adjust environment' }),
           el('div', { class: 'row' }, el('label', { class: 'inline', for: 'b-sandbox' }, envS, 'Sandbox (testing)'), el('label', { class: 'inline', for: 'b-production' }, envP, 'Production (store; only from main)')))),
       el('p', { class: 'small muted', text: 'The package name and the three links are filled in for you (package: ' + (defaults.packagePrefix || 'com.duste.') + '<game id>; links: defaults.json in the release repository). Change any of them for this build if needed.' }),
