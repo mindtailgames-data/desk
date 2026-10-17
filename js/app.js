@@ -487,8 +487,28 @@ async function buildsView() {
       pkg.value = last ? last.package : (defaults.packagePrefix || 'com.duste.') + id;
       syncEnv();
     };
-    const syncEnv = () => { const branch = source.value !== 'main'; envP.disabled = branch; if (branch) envS.checked = true; };
-    game.addEventListener('change', sync); source.addEventListener('change', syncEnv); sync();
+    // production: warn when the game changed since its last production build but game.json "version" did not
+    const verNote = el('div', { class: 'wide', id: 'b-version' }); let verAsk = 0, verMsg = '';
+    const checkVersion = async () => {
+      const ask = ++verAsk; verNote.replaceChildren(); verMsg = '';
+      if (!envP.checked || source.value !== 'main') return;
+      const id = game.value, last = rel.filter(r => r.game === id && r.environment === 'production' && r.factory_sha).slice(-1)[0];
+      if (!last) return;
+      try {
+        const files = async sha => { const t = await S.gh.tree(S.factory, sha), dir = 'games/' + id + '/', m = new Map();
+          for (const [p, e] of t) if (p.startsWith(dir) && !p.startsWith(dir + 'dist/')) m.set(p.slice(dir.length), e.sha); return m; };
+        const now = await mainSha(), [a, b] = await Promise.all([files(last.factory_sha), files(now)]);
+        const changed = [...new Set([...a.keys(), ...b.keys()])].filter(p => a.get(p) !== b.get(p)).sort();
+        if (!changed.length || !b.has('game.json')) return;
+        const ver = async sha => { try { return JSON.parse(await (await S.gh.reader(S.factory, sha, 'games/' + id)).text('game.json')).version; } catch (e) { return null; } };
+        const [v0, v1] = await Promise.all([ver(last.factory_sha), ver(now)]);
+        if (ask !== verAsk || v0 !== v1) return;
+        verMsg = 'The game changed since its last production build (' + last.versionCode + ': ' + changed.slice(0, 4).join(', ') + (changed.length > 4 ? ' and ' + (changed.length - 4) + ' more' : '') + ') but its version is still ' + v1 + '.';
+        verNote.replaceChildren(note('warn', verMsg + ' If players will notice the change, raise "version" in game.json (e.g. ' + v1 + ' → a higher number) and resubmit before this build. You can still build it as it is.'));
+      } catch (e) { /* the reminder is only a help: no warning if it cannot be checked */ }
+    };
+    const syncEnv = () => { const branch = source.value !== 'main'; envP.disabled = branch; if (branch) envS.checked = true; checkVersion(); };
+    game.addEventListener('change', sync); source.addEventListener('change', syncEnv); envS.addEventListener('change', checkVersion); envP.addEventListener('change', checkVersion); sync();
     const msg = el('div', { class: 'stack' });
     const start = el('button', { type: 'button', text: 'Review and start' });
     start.addEventListener('click', () => {
@@ -500,7 +520,7 @@ async function buildsView() {
       if (errs.length) { msg.replaceChildren(note('bad', 'Still needed: ' + errs.join('; ') + '.')); return; }
       const inputs = { game: game.value, source: source.value, package: pkg.value.trim(), support_url: email.value.trim(), terms_url: terms.value.trim(), privacy_url: privacy.value.trim(), adjust_environment: env };
       if (vc.value) inputs.version_code = String(parseInt(vc.value, 10));
-      confirmBox(msg, 'Start a ' + env + ' build of ' + inputs.game + ' from ' + inputs.source + ' as ' + inputs.package + '?' + (env === 'production' ? ' (Production: the Adjust events count in the real numbers.)' : ''), 'Start the build', async () => {
+      confirmBox(msg, 'Start a ' + env + ' build of ' + inputs.game + ' from ' + inputs.source + ' as ' + inputs.package + '?' + (env === 'production' ? ' (Production: the Adjust events count in the real numbers.)' : '') + (env === 'production' && verMsg ? ' Note: ' + verMsg : ''), 'Start the build', async () => {
         await S.gh.post(R() + '/actions/workflows/release.yml/dispatches', { ref: 'main', inputs });
         msg.replaceChildren(note('good', 'Started. It appears in the list below within a few seconds and takes about 10–15 minutes.'));
         setTimeout(() => refreshRuns(runs), 4000);
@@ -513,7 +533,7 @@ async function buildsView() {
         el('label', { for: 'b-vc' }, 'versionCode (empty: automatic)', vc),
         el('label', { for: 'b-email' }, 'Support link (the Support button in Settings)', email), el('label', { for: 'b-terms' }, 'Terms of use URL', terms), el('label', { for: 'b-privacy' }, 'Privacy policy URL', privacy),
         el('div', { class: 'stack wide' }, el('span', { class: 'small muted', text: 'Adjust environment' }),
-          el('div', { class: 'row' }, el('label', { class: 'inline', for: 'b-sandbox' }, envS, 'Sandbox (testing)'), el('label', { class: 'inline', for: 'b-production' }, envP, 'Production (store; only from main)')))),
+          el('div', { class: 'row' }, el('label', { class: 'inline', for: 'b-sandbox' }, envS, 'Sandbox (testing)'), el('label', { class: 'inline', for: 'b-production' }, envP, 'Production (store; only from main)'))), verNote),
       el('p', { class: 'small muted', text: 'The package name and the three links are filled in for you (package: ' + (defaults.packagePrefix || 'com.duste.') + '<game id>; links: defaults.json in the release repository). Change any of them for this build if needed.' }),
       el('div', { class: 'row' }, start), msg));
     const runs = el('div', { class: 'list' });
