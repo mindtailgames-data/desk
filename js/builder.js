@@ -2,8 +2,8 @@
 // Works on any "reader" ({ text(path), bytes(path), list(dir) }), so the website reads the kit from the factory's main branch
 // and the game from a submission branch, and a test reads both from disk. Nothing is sent anywhere.
 
-const ORDER = ['economy', 'levels', 'audio', 'haptics', 'analytics', 'settings', 'flows', 'boosters', 'home', 'splash'];
-const ALWAYS = new Set(['economy', 'levels', 'settings', 'flows', 'boosters', 'home', 'splash']);
+const ORDER = ['economy', 'levels', 'audio', 'haptics', 'analytics', 'settings', 'flows', 'tutorial', 'boosters', 'home', 'splash'];
+const ALWAYS = new Set(['economy', 'levels', 'settings', 'flows', 'tutorial', 'boosters', 'home', 'splash']);
 const FORBIDDEN_KEYS = ['token', 'secret', 'password', 'keystore', 'apikey', 'api_key'];
 const DEFAULT_ECONOMY = { startCoins: 2000, maxLives: 5, lifeMinutes: 30, playOnCost: 300, rewards: { normal: 25, hard: 50, superhard: 100 } };
 const MIME = { svg: 'image/svg+xml', png: 'image/png', webp: 'image/webp', jpg: 'image/jpeg', jpeg: 'image/jpeg', woff2: 'font/woff2',
@@ -197,6 +197,15 @@ export function fillLevels(gameId, levels) {
   return out;
 }
 
+// a tutorial card's "image" (a file next to levels.json) goes into the page as a data: URI (as build_game.py inline_images)
+const CARD_IMAGE = /^[A-Za-z0-9_-]+\.(png|webp|svg|jpg)$/;
+async function inlineImages(game, files, levels) {
+  for (const lv of levels) for (const c of lv.tutorial || []) {
+    if (c && typeof c === 'object' && typeof c.image === 'string' && CARD_IMAGE.test(c.image) && files.includes(c.image)) c.image = dataUri(c.image, await game.bytes(c.image));
+  }
+  return levels;
+}
+
 // game: a reader rooted at the game's folder (games/<id>/ or templates/starter/)
 export async function buildGame(kit, game, { links = null, bots = true } = {}) {
   const files = await game.list('');
@@ -208,7 +217,7 @@ export async function buildGame(kit, game, { links = null, bots = true } = {}) {
   const botJs = bots && files.includes('bot.js') ? pyText(await game.text('bot.js')) : null;
   cfg.links = links || { support: '', terms: '', privacy: '' };
   if (!('analytics' in cfg)) { const a = []; for (let n = 10; n <= submitted.length; n += 10) a.push(n); cfg.analytics = { levelAchieved: a }; }
-  const levels = fillLevels(cfg.id, submitted);
+  const levels = fillLevels(cfg.id, await inlineImages(game, files, submitted));
   const wrap = code => '(function () {\n' + code + '\n})();';
   const scripts = [['dk-game', wrap(gameJs)]];
   if (botJs !== null) scripts.push(['dk-bot', 'window.DK_TESTING = true;\n' + wrap(botJs)]);
