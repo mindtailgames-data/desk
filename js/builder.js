@@ -170,17 +170,45 @@ export async function buildPage(kit, cfg, { levels = null, gameCss = '', gameHtm
     '\n<script>\nDK.boot(' + pyJson(cfg) + ');\n</script>\n</body>\n</html>\n';
 }
 
+// A game with fewer than 100 levels is played as 100: the same copies, in the same order, as kit/build/build_game.py
+// fill_levels (seeded by the game's id; each copy has the difficulty the pattern asks for, no tutorial, "repeatOf").
+const FILL_TO = 100;
+const tagFor = n => n <= 10 ? 'normal' : n % 10 === 4 ? 'hard' : n % 10 === 9 ? 'superhard' : 'normal';
+export function fillLevels(gameId, levels) {
+  if (levels.length >= FILL_TO || levels.length <= 10) return levels;
+  let x = 2166136261;
+  for (const b of new TextEncoder().encode(gameId)) x = Math.imul(x ^ b, 16777619) >>> 0;
+  x = x || 1;
+  const rand = () => { x = (x ^ (x << 13)) >>> 0; x = (x ^ (x >>> 17)) >>> 0; x = (x ^ (x << 5)) >>> 0; return x; };
+  const pools = {};
+  for (let n = 11; n <= levels.length; n++) (pools[levels[n - 1].difficulty || 'normal'] ||= []).push(n);
+  const bags = {}, last = {}, out = levels.slice();
+  for (let n = levels.length + 1; n <= FILL_TO; n++) {
+    const want = (pools[tagFor(n)] || []).length ? tagFor(n) : (pools.normal || []).length ? 'normal' : Object.keys(pools)[0];
+    if (!(bags[want] || []).length) {
+      const bag = pools[want].slice();
+      for (let i = bag.length - 1; i > 0; i--) { const j = Math.floor(rand() * (i + 1) / 4294967296); [bag[i], bag[j]] = [bag[j], bag[i]]; }
+      if (bag.length > 1 && bag[bag.length - 1] === last[want]) [bag[bag.length - 1], bag[0]] = [bag[0], bag[bag.length - 1]];
+      bags[want] = bag;
+    }
+    const k = bags[want].pop(); last[want] = k;
+    out.push({ ...levels[k - 1], tutorial: [], repeatOf: k });
+  }
+  return out;
+}
+
 // game: a reader rooted at the game's folder (games/<id>/ or templates/starter/)
 export async function buildGame(kit, game, { links = null, bots = true } = {}) {
   const files = await game.list('');
   const cfg = JSON.parse(await game.text('game.json'));
   const lv = JSON.parse(await game.text('levels.json'));
-  const levels = Array.isArray(lv) ? lv : lv.levels;
+  const submitted = Array.isArray(lv) ? lv : lv.levels;
   const gameJs = pyText(await game.text('game.js'));
   const gameCss = files.includes('game.css') ? pyText(await game.text('game.css')) : '';
   const botJs = bots && files.includes('bot.js') ? pyText(await game.text('bot.js')) : null;
   cfg.links = links || { support: '', terms: '', privacy: '' };
-  if (!('analytics' in cfg)) { const a = []; for (let n = 10; n <= levels.length; n += 10) a.push(n); cfg.analytics = { levelAchieved: a }; }
+  if (!('analytics' in cfg)) { const a = []; for (let n = 10; n <= submitted.length; n += 10) a.push(n); cfg.analytics = { levelAchieved: a }; }
+  const levels = fillLevels(cfg.id, submitted);
   const wrap = code => '(function () {\n' + code + '\n})();';
   const scripts = [['dk-game', wrap(gameJs)]];
   if (botJs !== null) scripts.push(['dk-bot', 'window.DK_TESTING = true;\n' + wrap(botJs)]);

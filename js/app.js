@@ -576,7 +576,11 @@ function adjustCard(gameSelect) {
     box.replaceChildren(el('h2', { text: 'Adjust tokens' }), el('p', { class: 'muted', text: 'Loading…' }));
     let have = null, events = [10, 20, 30, 40, 50];
     try { const r = await S.gh.get(R() + '/actions/secrets?per_page=100'); have = new Map((r.secrets || []).map(x => [x.name, x.updated_at])); } catch (e) { have = e; }
-    try { const c = JSON.parse(await (await S.gh.reader(S.factory, await mainSha(), 'games/' + id)).text('game.json')); if (c.analytics && Array.isArray(c.analytics.levelAchieved)) events = c.analytics.levelAchieved; } catch (e) {}
+    try {   // as the build does: game.json "analytics", else one event every 10 submitted levels
+      const rd = await S.gh.reader(S.factory, await mainSha(), 'games/' + id), c = JSON.parse(await rd.text('game.json'));
+      if (c.analytics && Array.isArray(c.analytics.levelAchieved)) events = c.analytics.levelAchieved;
+      else { const l = JSON.parse(await rd.text('levels.json')), n = (Array.isArray(l) ? l : l.levels || []).length; events = []; for (let k = 10; k <= n; k += 10) events.push(k); }
+    } catch (e) {}
     if (n !== ask) return;
     const names = events.map(k => 'level_' + k + '_achieved').concat(DAY_EVENTS);
     const appName = 'ADJUST_APP_TOKEN_' + ID, evName = 'ADJUST_EVENTS_' + ID;
