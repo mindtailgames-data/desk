@@ -198,7 +198,7 @@ export function fillLevels(gameId, levels) {
 }
 
 // a tutorial card's "image" (a file next to levels.json) goes into the page as a data: URI (as build_game.py inline_images)
-const CARD_IMAGE = /^[A-Za-z0-9_-]+\.(png|webp|svg|jpg)$/;
+const CARD_IMAGE = /^[A-Za-z0-9_-]+\.(png|webp)$/;
 async function inlineImages(game, files, levels) {
   for (const lv of levels) for (const c of lv.tutorial || []) {
     if (c && typeof c === 'object' && typeof c.image === 'string' && CARD_IMAGE.test(c.image) && files.includes(c.image)) c.image = dataUri(c.image, await game.bytes(c.image));
