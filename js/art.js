@@ -88,6 +88,18 @@ export async function prepare(slot, file, M, current) {
     if (file.size > M.fonts.maxBytes) throw new Error(name + ': ' + Math.round(file.size / 1024) + ' KB (at most ' + Math.round(M.fonts.maxBytes / 1000) + ' KB). Ask for a Latin-only subset.');
     return { path: 'fonts/' + M.fonts.file + '.woff2', bytes: new Uint8Array(await file.arrayBuffer()), remove: [], note: 'woff2, ' + Math.round(file.size / 1024) + ' KB' };
   }
+  if (slot.kind === 'fontAdd') {   // another font for the text styles (or its license as a .txt): fonts/<name>.woff2
+    const stem = name.replace(/\.[^.]+$/, '').replace(/[^A-Za-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40);
+    if (!stem) throw new Error(name + ': name the file with letters or digits (for example Baloo2-Bold.woff2).');
+    if (ext === 'txt') {
+      if (file.size > 60000) throw new Error(name + ': a license text of at most 60 KB.');
+      return { path: 'fonts/' + stem + '.txt', bytes: new Uint8Array(await file.arrayBuffer()), remove: [], note: 'license, ' + Math.round(file.size / 1024) + ' KB' };
+    }
+    if (ext !== 'woff2') throw new Error(name + ': the font must be a .woff2 file (ask for a woff2, Latin-only subset; or convert it with a webfont tool).');
+    if (stem === M.fonts.file) throw new Error(name + ': this is the kit\'s own font: use Replace on it instead.');
+    if (file.size > M.fonts.maxBytes) throw new Error(name + ': ' + Math.round(file.size / 1024) + ' KB (at most ' + Math.round(M.fonts.maxBytes / 1000) + ' KB). Ask for a Latin-only subset.');
+    return { path: 'fonts/' + stem + '.woff2', bytes: new Uint8Array(await file.arrayBuffer()), remove: [], note: 'woff2, ' + Math.round(file.size / 1024) + ' KB', name: stem };
+  }
   if (slot.kind === 'sound' || slot.kind === 'music') {
     const rule = slot.kind === 'sound' ? M.sounds : M.music, base = slot.kind === 'sound' ? slot.name : M.music.file;
     if (!rule.formats.includes(ext)) throw new Error(name + ': must be ' + rule.formats.join(' or ') + '.');

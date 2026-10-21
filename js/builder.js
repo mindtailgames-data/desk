@@ -103,6 +103,31 @@ export async function loadSkin(kit) {
     lottie: celebration ? pyText(await kit.text('vendor/lottie_light_canvas.min.js')) : '' };
 }
 
+// the art team's text styles (kit/art/text.json; the styles are in kit/core/text.json): the fonts they use and the
+// style variables kit.css reads, '' when nothing is set (the same text as the factory's Python build)
+export async function loadText(kit) {
+  if (!(await kit.list('art')).includes('text.json')) return '';
+  const spec = JSON.parse(await kit.text('core/text.json')), art = JSON.parse(await kit.text('art/text.json'));
+  const fontFiles = await kit.list('art/fonts'), fonts = [], decl = [];
+  for (const st of spec.styles) {
+    const v = art[st.id], i = st.id;
+    if (!v || typeof v !== 'object' || Array.isArray(v)) continue;
+    if (v.color) decl.push('--t-' + i + '-c:' + v.color + ';');
+    if (v.outline) decl.push('--t-' + i + '-o:' + v.outline + ';');
+    if ('outlineWidth' in v) decl.push('--t-' + i + '-ow:calc(var(--u)*' + num(Number(v.outlineWidth)) + ');');
+    if (v.font) {
+      if (!fontFiles.includes(v.font + '.woff2')) throw new Error('kit/art/text.json: the font "' + v.font + '" (style ' + i + ') is not in kit/art/fonts/');
+      if (!fonts.includes(v.font)) fonts.push(v.font);
+      decl.push("--t-" + i + "-f:'DKF-" + v.font + "',var(--dk-font);");
+    }
+    if ('size' in v) decl.push('--t-' + i + '-s:' + num(Number(v.size) / 100) + ';');
+    if ('weight' in v) decl.push('--t-' + i + '-w:' + Math.trunc(Number(v.weight)) + ';');
+  }
+  let css = '';
+  for (const n of fonts.slice().sort()) css += "@font-face{font-family:'DKF-" + n + "';src:url(" + dataUri(n + '.woff2', await kit.bytes('art/fonts/' + n + '.woff2')) + ") format('woff2');font-weight:100 900;font-display:block}\n";
+  return css + (decl.length ? ':root{' + decl.join('') + '}' : '');
+}
+
 export async function splashBackground(kit) {
   let bg = null;
   if ((await kit.list('art/splash')).includes('splash.json')) bg = JSON.parse(await kit.text('art/splash/splash.json')).background;
@@ -126,6 +151,8 @@ export async function buildPage(kit, cfg, { levels = null, gameCss = '', gameHtm
   const skin = await loadSkin(kit);
   let cssAll = css;
   if (skin.css) cssAll += '\n' + skin.css;
+  const textCss = await loadText(kit);
+  if (textCss) cssAll += '\n' + textCss;
   if (skin.art) art.skin = skin.art;
   let js = (skin.lottie ? skin.lottie + '\n' : '') + pyText(await kit.text('core/kit.js'));
   for (const m of ORDER) if (mods[m]) js += pyText(await kit.text('modules/' + m + '.js'));

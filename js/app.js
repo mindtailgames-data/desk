@@ -154,19 +154,19 @@ function storageShim(id, level) {
     'var s={getItem:function(k){return Object.prototype.hasOwnProperty.call(m,k)?m[k]:null},setItem:function(k,v){m[k]=String(v)},removeItem:function(k){delete m[k]},clear:function(){m={}},key:function(i){return Object.keys(m)[i]||null},get length(){return Object.keys(m).length}};' +
     'try{Object.defineProperty(window,"localStorage",{value:s,configurable:true})}catch(e){}})();<\/script>\n';
 }
-// the kit's screens on request (art previews): the page listens to this page only, and only for these names
-const SCREEN_SCRIPT = '<script>(function(){var lvl=function(){DK.pop.close();if(DK.game&&DK.game.stop)DK.game.stop();DK.screen.show("home");DK.store.set("progress",{next:14});DK.economy._set({lives:5});DK.flow.play();setTimeout(function(){DK.pop.close();},50);};' +
-  'var A={home:function(){DK.pop.close();if(DK.game&&DK.game.stop)DK.game.stop();DK.screen.show("home");},settings:function(){A.home();DK.settingsUI.open(false);},level:lvl,' +
-  'paused:function(){lvl();setTimeout(function(){DK.flow.pause();},120);},booster:function(){lvl();setTimeout(function(){DK.boosters.list().forEach(function(b){DK.boosters.add(b.id,-DK.boosters.count(b.id));});var b=DK.boosters.list()[0];if(b)DK.boosters.use(b.id);},120);},' +
-  'fail:function(){lvl();setTimeout(function(){DK.flow.failed({reason:"Out of moves!",offer:"Play On: 5 more moves"});},120);},' +
-  'fail2:function(){A.fail();setTimeout(function(){var x=document.querySelector("#dk-pops .dk-panel > .dk-round.x");if(x)x.click();},300);},' +
-  'failed:function(){A.fail2();setTimeout(function(){var x=document.querySelector("#dk-pops .dk-panel > .dk-round.x");if(x)x.click();},600);},' +
-  'win:function(){lvl();setTimeout(function(){DK.flow.won();},120);},nolives:function(){A.home();DK.economy._set({lives:0});DK.flow.play();}};' +
-  'addEventListener("message",function(e){if(e.source!==parent||typeof e.data!=="object"||!e.data||e.data.desk!=="screen"||!A.hasOwnProperty(e.data.name))return;try{A[e.data.name]();}catch(x){}});})();<\/script>\n';
+// the kit's screens on request (art previews): the factory's own list, kit/preview/screens.js, goes into the page; the
+// page sends its list once loaded (the Show menu is made from it) and then answers this page only
+const screensOf = async (kit, built) => Object.assign(built, { screens: await kit.text('preview/screens.js').catch(() => null) });
+window.addEventListener('message', e => {
+  if (!playing || e.source !== $('#player-frame').contentWindow || !e.data || e.data.desk !== 'screens' || !Array.isArray(e.data.list)) return;
+  const sel = $('#player-screen'), groups = new Map();
+  for (const x of e.data.list.slice(0, 80)) { const g = String(x.group || ''); if (!groups.has(g)) groups.set(g, []); groups.get(g).push(x); }
+  sel.replaceChildren(el('option', { value: '', text: 'Show…' }), ...[...groups].map(([g, xs]) => el('optgroup', { label: g }, ...xs.map(x => el('option', { value: String(x.id), text: String(x.title) })))));
+});
 function showGame() {
   const lvl = Math.max(1, parseInt($('#player-level').value, 10) || 1);
   let page = playing.page.replace('<head>\n', () => '<head>\n' + storageShim(playing.id, lvl));
-  if (playing.screens) page = page.replace(/<\/body>\n<\/html>\n$/, () => SCREEN_SCRIPT + '</body>\n</html>\n');
+  if (playing.screens) page = page.replace(/<\/body>\n<\/html>\n$/, () => '<script>\n' + playing.screens + '\n</script>\n</body>\n</html>\n');
   $('#player-frame').srcdoc = page;
 }
 $('#player-screen').addEventListener('change', e => {
@@ -177,8 +177,8 @@ async function play(title, makePage, opts) {
   $('#player').hidden = false; $('#player-title').textContent = title; $('#player-msg').textContent = 'Building the game from GitHub…';
   $('#player-frame').srcdoc = '<p style="font:14px system-ui;color:#999;padding:16px">Building…</p>';
   try {
-    const { page, cfg } = await makePage();
-    playing = { title, page, id: cfg.id, screens: !!(opts && opts.screens) };
+    const { page, cfg, screens } = await makePage();
+    playing = { title, page, id: cfg.id, screens: opts && opts.screens && screens && !screens.toLowerCase().includes('</script') ? screens : null };
     $('#player-screen').hidden = !playing.screens;
     $('#player-msg').textContent = cfg.title + ' · built in this browser from GitHub · progress is not saved';
     showGame();
@@ -296,7 +296,7 @@ async function submissionView(n) {
     if (k.kind === 'game') act.append(el('button', { type: 'button', text: 'Play this version', onclick: () => play(p.title, () => gamePage(p.head.sha, k.id)) }));
     if (k.kind === 'art') act.append(el('button', { type: 'button', text: 'Preview the art on the kit screens', onclick: () => play('Art preview: ' + p.title, async () => {
       const kit = await S.gh.reader(S.factory, p.head.sha, 'kit'), starter = await S.gh.reader(S.factory, p.head.sha, 'templates/starter');
-      return buildGame(kit, starter, { bots: false });
+      return screensOf(kit, await buildGame(kit, starter, { bots: false }));
     }, { screens: true }) }));
     if (open && S.admin) {
       const green = check.state === 'green';
@@ -580,6 +580,7 @@ async function refreshRuns(box) {
 
 // ---------- Art ----------
 let staged = new Map();   // path in kit/art -> { bytes, preview, note, label } ; bytes null = delete
+const loadedFonts = new Set();   // fonts already loaded into this page for the samples (name:version)
 const again = () => { const y = window.scrollY; fresh(); artView().then(() => window.scrollTo(0, y)); };
 let artPreview = () => {};   // set by the Art page: the starter game with the art pack (and the staged changes)
 async function artView() {
@@ -621,7 +622,7 @@ async function artView() {
         el('label', { for: 'art-title' }, 'Title', titleIn),
         el('div', { class: 'row' }, propose, el('button', { type: 'button', class: 'ghost', text: 'Preview on the kit screens', onclick: () => play('Art preview', async () => {
           const starter = await S.gh.reader(S.factory, sha, 'templates/starter');
-          return buildGame(overlay(kit), starter, { bots: false });
+          return screensOf(kit, await buildGame(overlay(kit), starter, { bots: false }));
         }, { screens: true }) })), status);
     };
     // the kit with the staged changes on top (for the preview)
@@ -636,7 +637,7 @@ async function artView() {
     });
     artPreview = () => play(staged.size ? 'Art preview (with your ' + staged.size + ' change' + (staged.size === 1 ? '' : 's') + ')' : 'The current art', async () => {
       const starter = await S.gh.reader(S.factory, sha, 'templates/starter');
-      return buildGame(overlay(kit), starter, { bots: false });
+      return screensOf(kit, await buildGame(overlay(kit), starter, { bots: false }));
     }, { screens: true });
     const stage = (r, label) => { for (const p of r.remove || []) staged.set(p, { bytes: null }); staged.set(r.path, { bytes: r.bytes, preview: r.preview, note: r.note, label }); };
     const picker = (slot, accept, label, after) => {
@@ -674,8 +675,12 @@ async function artView() {
     });
     view.append(el('section', { class: 'card' }, el('h2', { text: 'Icons' }), el('p', { class: 'small muted', text: 'SVG stays sharp at any size (best). A picture of any size becomes a 256 x 256 transparent picture.' }), el('div', { class: 'art-grid' }, ...icons)));
 
-    // app icon, font, sounds
+    // app icon, fonts, sounds
     const appP = 'app-icon-foreground.png';
+    const fontNames = [...new Set([...current.filter(p => /^fonts\/[^/]+\.woff2$/.test(p) && !(staged.has(p) && !staged.get(p).bytes)), ...[...staged.keys()].filter(k => /^fonts\/[^/]+\.woff2$/.test(k) && staged.get(k).bytes)].map(p => p.slice(6, -6)))].sort((a, b) => (b === M.fonts.file) - (a === M.fonts.file) || a.localeCompare(b));
+    await Promise.all(fontNames.map(async n => { try { const key = n + ':' + (staged.has('fonts/' + n + '.woff2') ? 'staged' + staged.get('fonts/' + n + '.woff2').bytes.length : sha); if (loadedFonts.has(key)) return; loadedFonts.add(key);
+      const bytes = staged.has('fonts/' + n + '.woff2') ? staged.get('fonts/' + n + '.woff2').bytes : await kit.bytes('art/fonts/' + n + '.woff2');
+      const f = new FontFace('DeskF-' + n, bytes, { weight: '100 900' }); await f.load(); document.fonts.add(f); } catch (e) { /* (a broken font shows in the system font) */ } }));
     const sounds = await pool(M.sounds.names.concat(['music']), 4, async n => {
       const folder = n === 'music' ? M.music.folder : M.sounds.folder, base = n === 'music' ? M.music.file : n;
       const p = [...staged.keys()].find(k => k.startsWith(folder + '/' + base + '.') && staged.get(k).bytes) || current.find(k => k.startsWith(folder + '/' + base + '.'));
@@ -687,8 +692,11 @@ async function artView() {
         el('div', { class: 'row' }, el('div', { style: 'width:96px;height:96px;border-radius:22px;background:' + theme.bg2 + ' center/150% no-repeat;background-image:url(' + (current.includes(appP) || staged.has(appP) ? await urlOf(appP) : '') + ')' }),
           el('p', { class: 'small muted', text: 'Becomes 1024 x 1024 with a transparent background. Keep the drawing in the middle 61%: phones cut icons into circles and other shapes.' })),
         el('div', { class: 'row' }, ...picker({ kind: 'appicon' }, 'image/*', 'app icon'))),
-      el('section', { class: 'card' }, el('h2', { text: 'Font' }), el('p', { class: 'small', text: 'fonts/' + M.fonts.file + '.woff2' }),
-        el('p', { class: 'small muted', text: 'woff2, at most ' + Math.round(M.fonts.maxBytes / 1000) + ' KB, with a license that allows use in apps.' }), el('div', { class: 'row' }, ...picker({ kind: 'font' }, '.woff2', 'font')))));
+      el('section', { class: 'card' + ([...staged.keys()].some(k => k.startsWith('fonts/')) ? ' staged' : '') }, el('h2', { text: 'Fonts' }),
+        el('p', { class: 'small muted', text: 'woff2, at most ' + Math.round(M.fonts.maxBytes / 1000) + ' KB each, with a license that allows use in apps (add it too, as a .txt). The kit\'s font is used by every text unless its style (Texts, below) chooses another; only the fonts a style uses go into the games.' }),
+        el('div', { class: 'files' }, ...fontNames.map(n => el('div', { class: 'row small' }, el('span', { class: 'font-sample', style: 'font-family:"DeskF-' + n + '"', text: 'Aa 123' }), el('span', { text: n + (n === M.fonts.file ? '  (the kit\'s font)' : '') }), staged.has('fonts/' + n + '.woff2') ? chip('warn', 'new') : null))),
+        el('div', { class: 'row' }, ...picker({ kind: 'font' }, '.woff2', 'font').map(x => x.tagName === 'BUTTON' ? Object.assign(x, { textContent: 'Replace the kit\'s font…' }) : x),
+          ...picker({ kind: 'fontAdd' }, '.woff2,.txt', 'font').map(x => x.tagName === 'BUTTON' ? Object.assign(x, { textContent: 'Add a font or its license…' }) : x)))));
     view.append(el('section', { class: 'card' }, el('h2', { text: 'Sounds and music' }),
       el('p', { class: 'small muted', text: 'MP3 or OGG. Sounds at most ' + Math.round(M.sounds.maxBytes / 1000) + ' KB; music one seamless loop at most ' + (M.music.maxBytes / 1e6) + ' MB, licensed for apps.' }),
       el('div', { class: 'table' }, el('table', {}, el('tbody', {}, ...sounds)))));
@@ -701,6 +709,49 @@ async function artView() {
       return el('label', { for: 'c-' + k }, i, k);
     });
     view.append(el('section', { class: 'card' + (staged.has('theme.json') ? ' staged' : '') }, el('h2', { text: 'Colors' }), el('p', { class: 'small muted', text: 'The default colors of every game (a game can change its own).' }), el('div', { class: 'colors' }, ...colorInputs)));
+    // text styles: every text the kit writes (kit/core/text.json), as the art team sets them (kit/art/text.json)
+    const TS = JSON.parse(await kit.text('core/text.json'));
+    const textBase = current.includes('text.json') ? JSON.parse(await kit.text('art/text.json')) : {};
+    const textNow = staged.has('text.json') ? JSON.parse(new TextDecoder().decode(staged.get('text.json').bytes)) : textBase;
+    const setText = (id, patch) => {
+      const t = JSON.parse(JSON.stringify(textNow)), v = Object.assign({}, t[id] || {}, patch);
+      for (const k of Object.keys(v)) if (v[k] === undefined) delete v[k];
+      if (Object.keys(v).length) t[id] = v; else delete t[id];
+      if (JSON.stringify(t) === JSON.stringify(textBase)) staged.delete('text.json');
+      else staged.set('text.json', { bytes: new TextEncoder().encode(JSON.stringify(t, null, 1) + '\n'), note: Object.keys(t).length + ' style(s) set', label: 'texts' });
+      setTimeout(again);   // (after the event: a number box sends "change" while it loses focus, and the page is redrawn)
+    };
+    const kitColor = c => /^theme: /.test(c) ? themeNow[c.slice(7)] || '#ffffff' : c || '#000000';
+    const textRow = st => {
+      const v = textNow[st.id] || {}, d = st.default, set = Object.keys(v).length > 0;
+      const col = v.color || kitColor(d.color), out = (v.outline || kitColor(d.outline) || '#000000'), outRgb = out.slice(0, 7), outA = out.length === 9 ? Math.round(parseInt(out.slice(7), 16) / 2.55) : 100;
+      const ow = 'outlineWidth' in v ? v.outlineWidth : d.outlineWidth, size = 'size' in v ? v.size : 100, weight = 'weight' in v ? v.weight : d.weight, font = v.font || '';
+      const inp = (attrs, on) => { const i = el('input', attrs); i.addEventListener('change', () => on(i)); return i; };
+      const cIn = inp({ type: 'color', value: col, 'aria-label': st.title + ': color', class: 'color' in v ? '' : 'kit' }, i => setText(st.id, { color: i.value }));
+      const oIn = inp({ type: 'color', value: outRgb, 'aria-label': st.title + ': outline color', class: 'outline' in v ? '' : 'kit' }, i => setText(st.id, { outline: i.value + (outA < 100 ? Math.round(outA * 2.55).toString(16).padStart(2, '0') : '') }));
+      const oA = inp({ type: 'number', min: 0, max: 100, step: 5, value: outA, class: 'num', 'aria-label': st.title + ': outline opacity %', title: 'Outline opacity %' }, i => { const a = Math.max(0, Math.min(100, +i.value || 0)); setText(st.id, { outline: outRgb + (a < 100 ? Math.round(a * 2.55).toString(16).padStart(2, '0') : '') }); });
+      const owIn = inp({ type: 'number', min: 0, max: 2, step: 0.1, value: ow, class: 'num', 'aria-label': st.title + ': outline width', title: 'Outline width (0 = none)' }, i => setText(st.id, { outlineWidth: Math.max(0, Math.min(2, Math.round((+i.value || 0) * 10) / 10)) }));
+      const fIn = el('select', { 'aria-label': st.title + ': font' }, el('option', { value: '', text: 'The kit\'s font', selected: !font }), ...fontNames.filter(n => n !== M.fonts.file).map(n => el('option', { value: n, text: n, selected: font === n })));
+      fIn.addEventListener('change', () => setText(st.id, { font: fIn.value || undefined }));
+      const sIn = inp({ type: 'number', min: 50, max: 200, step: 5, value: size, class: 'num', 'aria-label': st.title + ': size %' }, i => setText(st.id, { size: Math.max(50, Math.min(200, Math.round(+i.value || 100))) }));
+      const wIn = el('select', { 'aria-label': st.title + ': weight' }, ...[[300, 'Light'], [400, 'Regular'], [500, 'Medium'], [600, 'Semi-bold'], [700, 'Bold'], [800, 'Extra-bold'], [900, 'Black']].map(([w, n]) => el('option', { value: w, text: n, selected: weight === w })));
+      wIn.addEventListener('change', () => setText(st.id, { weight: +wIn.value }));
+      const light = /panel-ink/.test(d.color), px = Math.min(34, d.size * 3.9 * size / 100), uPx = 3.9;
+      const sample = el('span', { class: 'text-sample' + (light ? ' light' : ''), text: st.id.startsWith('map-number') ? '14' : st.id === 'pill' ? '2000' : 'Aa 123',
+        style: 'color:' + col + ';font-family:"DeskF-' + (font || M.fonts.file) + '",system-ui;font-weight:' + weight + ';font-size:' + px.toFixed(1) + 'px;-webkit-text-stroke:' + (ow * uPx).toFixed(1) + 'px ' + (ow > 0 ? out : 'transparent') + ';paint-order:stroke fill' });
+      const fb = st.fallsBack ? TS.styles.find(x => x.id === st.fallsBack) : null;
+      return el('tr', { class: set || (staged.has('text.json') && JSON.stringify(textNow[st.id]) !== JSON.stringify(textBase[st.id])) ? 'set' : '' },
+        el('td', {}, el('strong', { text: st.title }), el('div', { class: 'small muted', text: st.note }), fb && !set ? el('div', { class: 'small muted', text: 'Until set: like ' + fb.title }) : null),
+        el('td', {}, sample), el('td', {}, cIn), el('td', {}, el('div', { class: 'row tight' }, oIn, oA, el('span', { class: 'small muted', text: '%' })), el('div', { class: 'row tight' }, owIn, el('span', { class: 'small muted', text: 'width' }))),
+        el('td', {}, fIn), el('td', {}, el('div', { class: 'row tight' }, sIn, el('span', { class: 'small muted', text: '%' }))), el('td', {}, wIn),
+        el('td', {}, set ? el('button', { type: 'button', class: 'link small', text: 'Back to the kit\'s look', onclick: () => { const t = JSON.parse(JSON.stringify(textNow)); delete t[st.id]; if (JSON.stringify(t) === JSON.stringify(textBase)) staged.delete('text.json'); else staged.set('text.json', { bytes: new TextEncoder().encode(JSON.stringify(t, null, 1) + '\n'), note: Object.keys(t).length + ' style(s) set', label: 'texts' }); setTimeout(again); } }) : el('span', { class: 'small muted', text: 'kit\'s look' })));
+    };
+    const textSec = el('section', { class: 'card' + (staged.has('text.json') ? ' staged' : '') }, el('div', { class: 'row' }, el('h2', { text: 'Texts' }), staged.has('text.json') ? chip('warn', 'changed') : null),
+      el('p', { class: 'small muted', text: 'Every text the kit writes, as a style: color, outline (color, opacity, width in kit units; 0 = none), font, size (% of the kit\'s size) and weight. A style you do not set keeps the kit\'s look (shown in grey). The tutorial follows the other popups until you set its styles. "The game\'s own texts" is the style games use for what they draw themselves (Moves 30). See them all in the preview: its Show menu reaches every screen.' }));
+    for (const g of [...new Set(TS.styles.map(x => x.group))]) textSec.append(el('h3', { text: g }), el('div', { class: 'table' }, el('table', { class: 'texts' },
+      el('thead', {}, el('tr', {}, ...['Style', 'Sample', 'Color', 'Outline', 'Font', 'Size', 'Weight', ''].map(t => el('th', { text: t })))),
+      el('tbody', {}, ...TS.styles.filter(x => x.group === g).map(textRow)))));
+    view.append(textSec);
     // UI skin: every element the kit draws can take a picture (kit/core/skin.json)
     const SK = JSON.parse(await kit.text('core/skin.json'));
     const previews = await downloadsReader(S.factory).catch(() => null);
@@ -719,11 +770,11 @@ async function artView() {
         // the kit's current drawing of this element, photographed by the factory check (downloads branch)
         const url = URL.createObjectURL(new Blob([await previews.bytes('previews/' + base + '.png')], { type: 'image/png' }));
         shown = el('div', { class: 'skin-thumb drawn', title: 'The kit\'s current drawing (no picture yet)' }, el('img', { alt: label + ' (drawn by the kit)', src: url }));
-      } else shown = el('span', { class: 'small muted', text: 'Drawn by the kit' });
+      } else shown = el('span', { class: 'small muted', text: sl.kind === 'cover' && /dim/.test(sl.selector) ? 'The kit\'s dark layer' : sl.id === 'tutorial-art' ? 'Not shown' : 'Drawn by the kit' });
       const reset = f ? el('button', { type: 'button', class: 'link small', text: 'Back to the kit\'s look', onclick: () => { for (const k of current.filter(k => k.startsWith('skin/' + base + '.'))) staged.set(k, { bytes: null, label }); for (const k of [...staged.keys()]) if (k.startsWith('skin/' + base + '.') && staged.get(k).bytes) staged.delete(k); again(); } }) : null;
       return el('div', { class: 'art-item skin' + (changed ? ' staged' : '') }, el('div', { class: 'swatch skin-swatch' }, shown),
         el('div', { class: 'nm', text: label }), el('div', { class: 'small muted', text: sl.size.join(' x ') + ' · ' + kindText(sl) }),
-        f ? null : el('div', { class: 'small muted', text: sl.kind === 'lottie' || sl.kind === 'pieces' ? 'No picture: the kit\'s default' : 'No picture yet: the kit\'s drawing (above)' }),
+        f ? null : el('div', { class: 'small muted', text: sl.id === 'tutorial-art' ? 'No picture: the cards show none' : sl.kind === 'lottie' || sl.kind === 'pieces' ? 'No picture: the kit\'s default' : 'No picture yet: the kit\'s drawing (above)' }),
         ...picker({ kind: 'skin', slot: sl, file: base }, sl.kind === 'lottie' ? '.json,application/json' : 'image/*', label), reset);
     };
     const groups = [...new Set(SK.slots.map(sl => sl.group))];
@@ -737,7 +788,7 @@ async function artView() {
       }
       skinSec.append(el('h3', { text: g }), el('div', { class: 'art-grid' }, ...items));
     }
-    skinSec.append(el('p', { class: 'small muted', text: 'Tip: "Preview on the kit screens" has a Show menu to jump to any screen (settings, a level, popups, the fail steps, the win screen).' }));
+    skinSec.append(el('p', { class: 'small muted', text: 'Tip: the preview\'s Show menu reaches every screen and popup of the kit (the splash, the home screen in all its states, the tutorial cards, levels of every difficulty, every popup and fail step, the win).' }));
     view.append(skinSec);
     view.append(tray); renderTray();
   } catch (e) { fail(view, e); }
