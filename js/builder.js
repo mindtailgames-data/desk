@@ -2,8 +2,8 @@
 // Works on any "reader" ({ text(path), bytes(path), list(dir) }), so the website reads the kit from the factory's main branch
 // and the game from a submission branch, and a test reads both from disk. Nothing is sent anywhere.
 
-const ORDER = ['economy', 'levels', 'audio', 'haptics', 'analytics', 'settings', 'flows', 'tutorial', 'boosters', 'home', 'splash'];
-const ALWAYS = new Set(['economy', 'levels', 'settings', 'flows', 'tutorial', 'boosters', 'home', 'splash']);
+const ORDER = ['economy', 'levels', 'audio', 'haptics', 'analytics', 'settings', 'flows', 'tutorial', 'boosters', 'home', 'milestones', 'splash'];
+const ALWAYS = new Set(['economy', 'levels', 'settings', 'flows', 'tutorial', 'boosters', 'home', 'milestones', 'splash']);
 const FORBIDDEN_KEYS = ['token', 'secret', 'password', 'keystore', 'apikey', 'api_key'];
 const DEFAULT_ECONOMY = { startCoins: 2000, maxLives: 5, lifeMinutes: 30, playOnCost: 300, rewards: { normal: 25, hard: 50, superhard: 100 } };
 const MIME = { svg: 'image/svg+xml', png: 'image/png', webp: 'image/webp', jpg: 'image/jpeg', jpeg: 'image/jpeg', woff2: 'font/woff2',
