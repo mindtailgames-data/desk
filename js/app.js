@@ -1,5 +1,6 @@
 // Desk: the factory's website. Every view reads live from the private repositories with the signed-in person's own
 // token; nothing is stored anywhere but in this browser's memory (and the token in this browser, if asked to).
+import { sealForGitHub } from './seal.js';
 import { client, session, GitHubError } from './gh.js';
 import { buildGame } from './builder.js';
 import { render as renderMd, esc } from './md.js';
@@ -131,7 +132,7 @@ function tokenHelp() {
       el('li', {}, 'Resource owner: the organization. Expiration: the longest your organization allows (you renew it when it ends).'),
       el('li', {}, 'Repository access: Only select repositories: the factory repository (and the release repository if you build releases).'),
       el('li', {}, 'Permissions for the factory repository: Contents: Read and write. Pull requests: Read and write. Actions: Read-only.'),
-      el('li', {}, 'For the release repository (owner only): Actions: Read and write. Contents: Read-only.'),
+      el('li', {}, 'For the release repository (owner only): Actions: Read and write. Contents: Read-only. Secrets: Read and write (for the Adjust tokens on the Builds page).'),
       el('li', {}, 'Generate, copy it, and paste it here. GitHub shows it only once; never send it to anyone.')));
 }
 async function start(v) {
@@ -536,6 +537,7 @@ async function buildsView() {
           el('div', { class: 'row' }, el('label', { class: 'inline', for: 'b-sandbox' }, envS, 'Sandbox (testing)'), el('label', { class: 'inline', for: 'b-production' }, envP, 'Production (store; only from main)'))), verNote),
       el('p', { class: 'small muted', text: 'The package name and the three links are filled in for you (package: ' + (defaults.packagePrefix || 'com.duste.') + '<game id>; links: defaults.json in the release repository). Change any of them for this build if needed.' }),
       el('div', { class: 'row' }, start), msg));
+    if (ids.length) view.append(adjustCard(game));
     const runs = el('div', { class: 'list' });
     view.append(el('section', { class: 'card' }, el('div', { class: 'row' }, el('h2', { text: 'Recent builds' }), el('span', { class: 'small muted', text: ISTANBUL }), el('button', { type: 'button', class: 'ghost', text: 'Refresh', onclick: () => refreshRuns(runs) })), runs));
     refreshRuns(runs);
@@ -559,6 +561,64 @@ async function buildsView() {
         el('td', {}, filesOf(r) ? buildFiles(r, filesOf(r)) : el('a', { href: r.run, target: '_blank', rel: 'noopener noreferrer', text: 'On GitHub', title: 'Built before downloads were kept here, or older than the last 12 builds' }))))))) : el('p', { class: 'muted', text: 'No releases yet.' })),
       el('p', { class: 'small muted', text: 'Play runs the exact game page inside that build. The files of the last 12 builds are kept here.' }));
   } catch (e) { fail(view, e); }
+}
+// ---------- Adjust tokens: GitHub secrets of the release repository, written from here ----------
+// Each value is encrypted in this browser with the repository's public key (js/seal.js) and sent only to GitHub; it is
+// never shown, kept or readable again (GitHub keeps secrets write-only). The build reads them by the game's id:
+// ADJUST_APP_TOKEN_<ID> and ADJUST_EVENTS_<ID> (one "event_name=token" per line).
+const DAY_EVENTS = ['day_1_login', 'day_2_login', 'day_3_login'];
+const TOKEN_RE = /^[A-Za-z0-9]{4,64}$/;
+function adjustCard(gameSelect) {
+  const box = el('section', { class: 'card', id: 'adjust' });
+  let ask = 0;
+  const draw = async () => {
+    const n = ++ask, id = gameSelect.value, ID = id.toUpperCase();
+    box.replaceChildren(el('h2', { text: 'Adjust tokens' }), el('p', { class: 'muted', text: 'Loading…' }));
+    let have = null, events = [10, 20, 30, 40, 50];
+    try { const r = await S.gh.get(R() + '/actions/secrets?per_page=100'); have = new Map((r.secrets || []).map(x => [x.name, x.updated_at])); } catch (e) { have = e; }
+    try { const c = JSON.parse(await (await S.gh.reader(S.factory, await mainSha(), 'games/' + id)).text('game.json')); if (c.analytics && Array.isArray(c.analytics.levelAchieved)) events = c.analytics.levelAchieved; } catch (e) {}
+    if (n !== ask) return;
+    const names = events.map(k => 'level_' + k + '_achieved').concat(DAY_EVENTS);
+    const appName = 'ADJUST_APP_TOKEN_' + ID, evName = 'ADJUST_EVENTS_' + ID;
+    const state = name => have instanceof Map ? (have.has(name) ? chip('good', 'Set ' + when(have.get(name))) : chip('warn', 'Not set')) : chip('', 'Unknown');
+    const field = (name, label) => { const i = el('input', { type: 'password', autocomplete: 'off', spellcheck: 'false', 'data-event': name, placeholder: 'token' }); return [i, el('label', {}, label, i)]; };
+    const [appIn, appLabel] = field(null, 'App token');
+    const evFields = names.map(nm => field(nm, nm));
+    const msg = el('div', { class: 'stack' });
+    const save = async (secret, value, btn, done) => {
+      btn.disabled = true;
+      try {
+        const key = await S.gh.get(R() + '/actions/secrets/public-key');
+        await S.gh.put(R() + '/actions/secrets/' + secret, sealForGitHub(value, key));
+        done(); msg.replaceChildren(note('good', secret + ' saved. The next build of ' + id + ' uses it.')); setTimeout(draw, 1500);
+      } catch (e) { msg.replaceChildren(note('bad', e.status === 403 || e.status === 404 ? 'GitHub refused (' + e.message + ') Your token needs "Secrets: Read and write" on the release repository.' : e.message)); }
+      btn.disabled = false;
+    };
+    const appBtn = el('button', { type: 'button', text: 'Save the app token' });
+    appBtn.addEventListener('click', () => {
+      const v = appIn.value.trim();
+      if (!TOKEN_RE.test(v)) { msg.replaceChildren(note('bad', 'The app token has only letters and digits (Adjust > the app > App token).')); return; }
+      confirmBox(msg, 'Replace ' + appName + ' for ' + id + '?', 'Save', () => save(appName, v, appBtn, () => { appIn.value = ''; }));
+    });
+    const evBtn = el('button', { type: 'button', text: 'Save the event tokens' });
+    evBtn.addEventListener('click', () => {
+      const lines = [], empty = [], bad = [];
+      for (const [i] of evFields) { const v = i.value.trim(); if (!v) empty.push(i.dataset.event); else if (!TOKEN_RE.test(v)) bad.push(i.dataset.event); else lines.push(i.dataset.event + '=' + v); }
+      if (bad.length) { msg.replaceChildren(note('bad', 'Only letters and digits in a token: ' + bad.join(', ') + '.')); return; }
+      if (!lines.length) { msg.replaceChildren(note('bad', 'Enter the event tokens first.')); return; }
+      confirmBox(msg, 'Replace ' + evName + ' with ' + lines.length + ' event token' + (lines.length > 1 ? 's' : '') + '?' + (empty.length ? ' These stay empty and will not be sent: ' + empty.join(', ') + '.' : ''), 'Save', () => save(evName, lines.join('\n'), evBtn, () => evFields.forEach(([i]) => { i.value = ''; })));
+    });
+    box.replaceChildren(el('h2', { text: 'Adjust tokens' }),
+      el('p', { class: 'small muted', text: 'For ' + id + ': written as GitHub secrets of the release repository, encrypted in this browser. GitHub never shows them again, so the fields are always empty; saving replaces the old value. Event tokens are saved together: enter all of them each time.' }),
+      ...(have instanceof Error ? [note('warn', 'Cannot see which secrets are set (' + have.message + ') Your token needs "Secrets: Read and write" on the release repository.')] : []),
+      el('div', { class: 'row' }, el('strong', { text: appName }), state(appName)),
+      el('div', { class: 'form' }, appLabel), el('div', { class: 'row' }, appBtn),
+      el('div', { class: 'row' }, el('strong', { text: evName }), state(evName)),
+      el('p', { class: 'small muted', text: 'Make each event in Adjust (the app > Events), then copy its token here. day_N_login: once per player, on a session N calendar days (Istanbul time) after the first open.' }),
+      el('div', { class: 'form' }, ...evFields.map(f => f[1])), el('div', { class: 'row' }, evBtn), msg);
+  };
+  gameSelect.addEventListener('change', draw); draw();
+  return box;
 }
 // what a new build's form starts with: defaults.json in the release repository (editable there)
 async function buildDefaults() {
