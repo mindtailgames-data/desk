@@ -74,6 +74,18 @@ function prKind(pr) {
   return { kind: 'other' };
 }
 async function prs(state) { return S.gh.get(F() + '/pulls?state=' + state + '&sort=updated&direction=desc&per_page=40'); }
+// The other open art proposals that change the same art files (paths: kit/art/...). Git cannot combine two versions of
+// a picture: once one of them is merged, the other has a conflict and cannot be merged until that is fixed. The
+// extension is ignored (home-bg.png and home-bg.webp are the same slot: both would be in the art pack).
+async function artOverlaps(paths, except) {
+  const keyOf = f => f.replace(/\.[^./]+$/, ''), want = new Set(paths.map(keyOf)), out = [];
+  for (const p of (await prs('open')).filter(p => p.head.ref.startsWith('art/') && p.number !== Number(except))) {
+    const hit = (await S.gh.get(F() + '/pulls/' + p.number + '/files?per_page=100')).map(f => f.filename).filter(f => f.startsWith('kit/art/') && want.has(keyOf(f)));
+    if (hit.length) out.push({ p, hit });
+  }
+  return out;
+}
+const overlapList = list => list.map(o => el('span', {}, el('a', { href: '#submission/' + o.p.number, text: '#' + o.p.number }), ' "' + o.p.title + '" by @' + o.p.user.login + ': ' + o.hit.map(f => f.slice(8)).join(', ')));
 // the factory check on a commit: { state: running|green|red|none, url }
 async function checkOf(sha) {
   const r = await S.gh.get(F() + '/actions/runs?head_sha=' + sha + '&per_page=20');
@@ -299,9 +311,12 @@ async function submissionView(n) {
       const kit = await S.gh.reader(S.factory, p.head.sha, 'kit'), starter = await S.gh.reader(S.factory, p.head.sha, 'templates/starter');
       return screensOf(kit, await buildGame(kit, starter, { bots: false }));
     }, { screens: true }) }));
+    // an art proposal: a conflict with main (another proposal changed the same pictures and was approved first), or
+    // other open proposals that change the same pictures (approving one gives the other a conflict)
+    const conflict = open && p.mergeable === false, clash = open && k.kind === 'art' ? await artOverlaps(files.map(f => f.filename), n).catch(() => []) : [];
     if (open && S.admin) {
-      const green = check.state === 'green';
-      act.append(el('button', { type: 'button', text: 'Approve and merge', disabled: !green, title: green ? '' : 'Only a green submission can be approved', onclick: () => confirmBox(msg, 'Merge "' + p.title + '" into main? It becomes part of the factory.', 'Merge', async () => {
+      const green = check.state === 'green' && !conflict;
+      act.append(el('button', { type: 'button', text: 'Approve and merge', disabled: !green, title: green ? '' : conflict ? 'It has a conflict with main' : 'Only a green submission can be approved', onclick: () => confirmBox(msg, 'Merge "' + p.title + '" into main? It becomes part of the factory.', 'Merge', async () => {
         await S.gh.put(F() + '/pulls/' + n + '/merge', { merge_method: 'squash', sha: p.head.sha });
         try { await S.gh.del(F() + '/git/refs/heads/' + p.head.ref.split('/').map(encodeURIComponent).join('/')); } catch (e) {}
         route();
@@ -311,6 +326,9 @@ async function submissionView(n) {
     }
     view.append(el('section', { class: 'card' }, act, msg,
       check.state === 'running' ? note('', 'The factory check is running, then the test app is built (about 10 minutes in all). Reload this page to see the result.') : null,
+      conflict ? note('bad', 'This ' + (k.kind === 'art' ? 'proposal' : 'submission') + ' has a conflict with main: something approved after it was made changed the same files, so it cannot be merged as it is. ' + (k.kind === 'art' ? 'Decline it and propose its files again in Art (Art always starts from the current main), or have the conflict fixed on its branch.' : 'Submit it again (it updates in place), or have the conflict fixed on its branch.')) : null,
+      clash.length ? note('warn', el('div', { class: 'stack' }, el('strong', { text: 'Another open art proposal changes the same pictures' }), ...overlapList(clash),
+        el('span', { class: 'small', text: 'Approve only one of them: the other then gets a conflict. Decline that one and propose its pictures again in Art if they are still wanted.' }))) : null,
       open && check.state === 'red' ? note('bad', S.admin ? 'Not green: decline it with a short note, or wait for the submitter to fix it.' : 'Not green yet: fix what the report says and submit again. Your submission updates in place.') : null));
     if (k.kind === 'game') {
       const dl = await downloadsReader(S.factory).catch(() => null), dir = 'pr-' + n + '/';
@@ -665,8 +683,14 @@ async function artView() {
       tray.hidden = !staged.size;
       if (!staged.size) return;
       const titleIn = el('input', { id: 'art-title', placeholder: 'What changed (for example: New splash and coin icon)' });
-      const status = el('div', { class: 'stack' });
+      const status = el('div', { class: 'stack' }), clash = el('div');
       const propose = el('button', { type: 'button', text: 'Propose for approval' });
+      artOverlaps([...staged.keys()].map(k => 'kit/art/' + k)).then(list => {   // (another open proposal changes the same files)
+        if (!list.length || !tray.contains(clash)) return;
+        clash.replaceChildren(note('warn', el('div', { class: 'stack' }, el('strong', { text: 'Also changed in an open art proposal' }), ...overlapList(list),
+          el('span', { class: 'small', text: 'Two proposals cannot both change the same picture: whichever is approved second gets a conflict and cannot be approved. Approve or decline that proposal first and then propose this one, or leave these files out of it.' }))));
+        propose.textContent = 'Propose anyway';
+      }).catch(() => {});
       propose.addEventListener('click', async () => {
         propose.disabled = true; status.replaceChildren(el('p', { class: 'muted', text: 'Uploading…' }));
         try {
@@ -683,7 +707,7 @@ async function artView() {
       });
       tray.replaceChildren(el('div', { class: 'row' }, el('h2', { text: staged.size + ' change' + (staged.size === 1 ? '' : 's') + ' ready' }), el('button', { type: 'button', class: 'ghost', text: 'Discard all', onclick: () => { staged = new Map(); again(); } })),
         el('div', { class: 'files' }, ...[...staged.entries()].map(([p, s]) => el('div', { text: (s.bytes ? '✎ ' : '✕ ') + p + (s.note ? '  ·  ' + s.note : '') }))),
-        el('label', { for: 'art-title' }, 'Title', titleIn),
+        el('label', { for: 'art-title' }, 'Title', titleIn), clash,
         el('div', { class: 'row' }, propose, el('button', { type: 'button', class: 'ghost', text: 'Preview on the kit screens', onclick: () => play('Art preview', async () => {
           const starter = await S.gh.reader(S.factory, sha, 'templates/starter');
           return screensOf(kit, await buildGame(overlay(kit), starter, { bots: false }));

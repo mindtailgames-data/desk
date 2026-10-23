@@ -122,7 +122,7 @@ details summary { cursor: pointer; font-weight: 600; }
 .shape div::after { content: ''; position: absolute; inset: 15% 5%; border: 1px dashed rgba(255, 255, 255, 0.75); }
 .colors { display: grid; gap: 8px; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); }
 .colors label { flex-direction: row; align-items: center; gap: 8px; font: 13px var(--mono); color: var(--ink); }
-.tray { position: sticky; bottom: 12px; border-color: var(--accent); box-shadow: var(--shadow); }
+.tray { position: sticky; bottom: 12px; border-color: var(--accent); box-shadow: var(--shadow); max-height: 45vh; overflow-y: auto; }   /* (never hides more than half the page) */
 
 /* player */
 .player { position: fixed; inset: 0; z-index: 50; background: rgba(8, 10, 16, 0.86); display: flex; flex-direction: column;
