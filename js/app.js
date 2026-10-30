@@ -167,18 +167,30 @@ function storageShim(id, level) {
     'var s={getItem:function(k){return Object.prototype.hasOwnProperty.call(m,k)?m[k]:null},setItem:function(k,v){m[k]=String(v)},removeItem:function(k){delete m[k]},clear:function(){m={}},key:function(i){return Object.keys(m)[i]||null},get length(){return Object.keys(m).length}};' +
     'try{Object.defineProperty(window,"localStorage",{value:s,configurable:true})}catch(e){}})();<\/script>\n';
 }
+// the frame rate inside the frame, once a second (Desk only, never in a build): frames and the slowest frame. Under 20
+// frames a second (a frame over 50 ms), a game that caps its time step plays in slow motion here
+const fpsMeter = () => '<script>(function(){var n=0,slow=0,worst=0,last=0,t0=0;function f(t){if(last){var d=t-last;n++;if(d>50)slow++;if(d>worst)worst=d}else t0=t;last=t;' +
+  'if(t-t0>=1000){parent.postMessage({desk:"fps",fps:Math.round(n*1000/(t-t0)),slow:slow,worst:Math.round(worst)},"*");n=0;slow=0;worst=0;t0=t}requestAnimationFrame(f)}requestAnimationFrame(f)})();<\/script>\n';
+function showFps(d) {
+  const c = $('#player-fps'), bad = d.fps < 20 || d.slow > 0;
+  c.textContent = d.fps + ' fps' + (d.slow ? ' · ' + d.slow + ' slow frame' + (d.slow > 1 ? 's' : '') + ' (longest ' + d.worst + ' ms)' : '');
+  c.className = 'chip ' + (bad ? 'bad' : 'good');
+}
 // the kit's screens on request (art previews): the factory's own list, kit/preview/screens.js, goes into the page; the
 // page sends its list once loaded (the Show menu is made from it) and then answers this page only
 const screensOf = async (kit, built) => Object.assign(built, { screens: await kit.text('preview/screens.js').catch(() => null) });
 window.addEventListener('message', e => {
-  if (!playing || e.source !== $('#player-frame').contentWindow || !e.data || e.data.desk !== 'screens' || !Array.isArray(e.data.list)) return;
+  if (!playing || e.source !== $('#player-frame').contentWindow || !e.data) return;
+  if (e.data.desk === 'fps' && [e.data.fps, e.data.slow, e.data.worst].every(Number.isFinite)) return showFps(e.data);
+  if (e.data.desk !== 'screens' || !Array.isArray(e.data.list)) return;
   const sel = $('#player-screen'), groups = new Map();
   for (const x of e.data.list.slice(0, 80)) { const g = String(x.group || ''); if (!groups.has(g)) groups.set(g, []); groups.get(g).push(x); }
   sel.replaceChildren(el('option', { value: '', text: 'Show…' }), ...[...groups].map(([g, xs]) => el('optgroup', { label: g }, ...xs.map(x => el('option', { value: String(x.id), text: String(x.title) })))));
 });
 function showGame() {
   const lvl = Math.max(1, parseInt($('#player-level').value, 10) || 1);
-  let page = playing.page.replace('<head>\n', () => '<head>\n' + storageShim(playing.id, lvl));
+  let page = playing.page.replace('<head>\n', () => '<head>\n' + storageShim(playing.id, lvl) + fpsMeter());
+  $('#player-fps').textContent = '… fps'; $('#player-fps').className = 'chip';
   if (playing.screens) page = page.replace(/<\/body>\n<\/html>\n$/, () => '<script>\n' + playing.screens + '\n</script>\n</body>\n</html>\n');
   $('#player-frame').srcdoc = page;
 }

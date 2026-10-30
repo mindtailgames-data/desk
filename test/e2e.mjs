@@ -333,6 +333,7 @@ try {
   await p.click('button:has-text("Play this version")');
   ok('submission: "Play this version" builds the game in the browser and runs it (sealed frame)', await frame(p).locator('#dk-home').waitFor({ timeout: 60000 }).then(() => true, () => false) && (await p.innerText('#player-msg')).includes('Sort Demo'));
   ok('the player\'s frame is sealed (scripts only: no network, no storage, no access to Desk)', await p.getAttribute('#player-frame', 'sandbox') === 'allow-scripts');
+  ok('the player shows the game\'s frame rate (measured inside the sealed frame)', await p.waitForFunction(() => /^\d+ fps/.test(document.querySelector('#player-fps').textContent), null, { timeout: 5000 }).then(() => true, () => false));
   await shot(p, 'player');
   await p.click('#player-close');
   const [apk] = await Promise.all([p.waitForEvent('download', { timeout: 20000 }), p.click('button:has-text("Download the test app (.apk)")')]);
