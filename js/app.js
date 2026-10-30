@@ -104,8 +104,8 @@ async function releases() {
 
 // ---------- sign-in ----------
 function signInView(msg) {
-  const view = cur;
   $('#nav').hidden = true; $('#who').hidden = true; fresh();
+  const view = cur;   // (the new page: taken after fresh(), or the form would go into the page just removed)
   const saved = (() => { try { return JSON.parse(localStorage.getItem('desk.repos') || 'null'); } catch (e) { return null; } })() || {};
   const token = el('input', { id: 'token', type: 'password', autocomplete: 'off', spellcheck: 'false', placeholder: 'github_pat_…' });
   const factory = el('input', { id: 'factory', placeholder: 'organization/repository', value: saved.factory || '', spellcheck: 'false' });
