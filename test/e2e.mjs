@@ -504,7 +504,7 @@ try {
     'tutorial-booster': '.dk-panel.tut.booster .tut-pic', 'tutorial-booster-use': '#dk-tut:not(.dk-hidden) .bubble:has-text("Tap to use")', 'tutorial-obstacle': '.dk-panel.tut.obstacle .tut-pic img',
     'booster-locked': '.dk-booster.locked', level: '#dk-hud .lvl.normal', 'level-hard': '#dk-hud .lvl.hard', 'level-superhard': '#dk-hud .lvl.superhard',
     'boosters-empty': '.dk-booster .cnt.plus', paused: '#dk-pops .dk-btn.red', quit: '.dk-panel.fail .msg:has-text("lose one life")', booster: '#dk-pops .booster-art',
-    'booster-nocoins': '#dk-pops .note.warn:not(.dk-hidden)', fail: '#dk-pops .msg:has-text("Play On")', 'fail-nocoins': '#dk-pops .note.warn:not(.dk-hidden)',
+    'booster-nocoins': '#dk-pops .note.warn:not(.dk-hidden)', fail: '#dk-pops .amount', 'fail-art': '#dk-pops .fail-art img', 'fail-nocoins': '#dk-pops .note.warn:not(.dk-hidden)',
     fail2: '.dk-panel.fail .msg:has-text("lose one life")', failed: '.dk-panel .lost', nolives: '.dk-heart', refill: '.dk-heart b:has-text("2")',
     'refill-nocoins': '#dk-pops .note.warn:not(.dk-hidden)', 'milestones-home': '.dk-ms-bar:not(.dk-hidden)', milestones: '.ms-row', 'milestone-reward': '.dk-win.ms-reward',
     'milestones-gone': '#dk-home:has(.dk-ms-bar.dk-hidden) .dk-node.cur', win: '.dk-win:not(.ms-reward)' };
