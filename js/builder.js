@@ -143,7 +143,7 @@ export async function buildPage(kit, cfg, { levels = null, gameCss = '', gameHtm
   const eco = Object.assign({}, DEFAULT_ECONOMY, cfg.economy || {}); cfg.economy = eco;
   const art = await loadArt(kit);
   const theme = Object.assign({}, art.theme, cfg.theme || {}); delete art.theme; cfg.theme = theme;
-  const font = (await first(kit, 'fonts', 'Fredoka-latin')) || (await first(kit, 'fonts', 'font'));
+  const font = (await first(kit, 'fonts', JSON.parse(await kit.text('art/manifest.json')).fonts.file)) || (await first(kit, 'fonts', 'font'));   // the kit's font: the manifest names it
   const splash = (await first(kit, 'splash', 'duste-splash')) || (await first(kit, 'splash', 'splash'));
   const fontB64 = base64(await kit.bytes(font)), splashUri = dataUri(splash, await kit.bytes(splash)), splashBg = await splashBackground(kit);
   const css = pyText(await kit.text('core/kit.css')).replaceAll('/*FONT*/', () => fontB64)
