@@ -5,7 +5,7 @@
 const ORDER = ['economy', 'levels', 'audio', 'haptics', 'analytics', 'settings', 'flows', 'tutorial', 'boosters', 'home', 'milestones', 'splash'];
 const ALWAYS = new Set(['economy', 'levels', 'audio', 'haptics', 'analytics', 'settings', 'flows', 'tutorial', 'boosters', 'home', 'milestones', 'splash']);
 const FORBIDDEN_KEYS = ['token', 'secret', 'password', 'keystore', 'apikey', 'api_key'];
-const DEFAULT_ECONOMY = { startCoins: 2000, maxLives: 5, lifeMinutes: 30, playOnCost: 300, rewards: { normal: 25, hard: 50, superhard: 100 } };
+const DEFAULT_ECONOMY = { startCoins: 3600, maxLives: 5, lifeMinutes: 30, playOnCost: 300, rewards: { normal: 25, hard: 50, superhard: 100 } };
 const MIME = { svg: 'image/svg+xml', png: 'image/png', webp: 'image/webp', jpg: 'image/jpeg', jpeg: 'image/jpeg', woff2: 'font/woff2',
   mp3: 'audio/mpeg', ogg: 'audio/ogg', wav: 'audio/x-wav', m4a: 'audio/mp4' };
 
