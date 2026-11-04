@@ -161,10 +161,15 @@ $('#logout').addEventListener('click', signOut);
 
 // ---------- the player: a game in a sealed frame ----------
 let playing = null;   // { title, page, id }
-function storageShim(id, level) {
-  // the frame has no storage of its own (sealed): give the kit an in-memory one, starting at the chosen level
-  return '<script>(function(){var m={};m[' + JSON.stringify('dk.' + id + '.progress') + ']=' + JSON.stringify(JSON.stringify({ next: level })) + ';' +
-    'var s={getItem:function(k){return Object.prototype.hasOwnProperty.call(m,k)?m[k]:null},setItem:function(k,v){m[k]=String(v)},removeItem:function(k){delete m[k]},clear:function(){m={}},key:function(i){return Object.keys(m)[i]||null},get length(){return Object.keys(m).length}};' +
+function storageShim(id, level, lang) {
+  // the frame has no storage of its own (sealed): give the kit an in-memory one, starting at the chosen level (and language).
+  // It is kept in the frame's window.name while this run lasts, so the game's own restart (a new language) keeps it.
+  const start = { ['dk.' + id + '.progress']: JSON.stringify({ next: level }) };
+  if (lang) start['dk.' + id + '.lang'] = JSON.stringify(lang);
+  const run = Math.random().toString(36).slice(2);
+  return '<script>(function(){var R=' + JSON.stringify(run) + ',m=null;try{var w=JSON.parse(window.name||"{}");if(w&&w.run===R)m=w.m}catch(e){}if(!m)m=' + JSON.stringify(start) + ';' +
+    'var keep=function(){try{window.name=JSON.stringify({run:R,m:m})}catch(e){}};keep();' +
+    'var s={getItem:function(k){return Object.prototype.hasOwnProperty.call(m,k)?m[k]:null},setItem:function(k,v){m[k]=String(v);keep()},removeItem:function(k){delete m[k]},clear:function(){m={}},key:function(i){return Object.keys(m)[i]||null},get length(){return Object.keys(m).length}};' +
     'try{Object.defineProperty(window,"localStorage",{value:s,configurable:true})}catch(e){}})();<\/script>\n';
 }
 // the frame rate inside the frame, once a second (Desk only, never in a build): frames and the slowest frame. Under 20
@@ -189,7 +194,8 @@ window.addEventListener('message', e => {
 });
 function showGame() {
   const lvl = Math.max(1, parseInt($('#player-level').value, 10) || 1);
-  let page = playing.page.replace('<head>\n', () => '<head>\n' + storageShim(playing.id, lvl) + fpsMeter());
+  const lang = playing.langs.length > 1 ? $('#player-lang').value : null;
+  let page = playing.page.replace('<head>\n', () => '<head>\n' + storageShim(playing.id, lvl, lang) + fpsMeter());
   $('#player-fps').textContent = '… fps'; $('#player-fps').className = 'chip';
   if (playing.screens) page = page.replace(/<\/body>\n<\/html>\n$/, () => '<script>\n' + playing.screens + '\n</script>\n</body>\n</html>\n');
   $('#player-frame').srcdoc = page;
@@ -203,13 +209,17 @@ async function play(title, makePage, opts) {
   $('#player-frame').srcdoc = '<p style="font:14px system-ui;color:#999;padding:16px">Building…</p>';
   try {
     const { page, cfg, screens } = await makePage();
-    playing = { title, page, id: cfg.id, screens: opts && opts.screens && screens && !screens.toLowerCase().includes('</script') ? screens : null };
+    playing = { title, page, id: cfg.id, screens: opts && opts.screens && screens && !screens.toLowerCase().includes('</script') ? screens : null, langs: Array.isArray(cfg.languages) && cfg.languages.length ? cfg.languages : ['en'] };
     $('#player-screen').hidden = !playing.screens;
+    // a game in two languages: play it in either (the game's own Settings can switch too)
+    $('#player-lang').replaceChildren(...playing.langs.map(l => el('option', { value: l, text: ({ en: 'English', tr: 'Türkçe' })[l] || l })));
+    $('#player-lang').closest('label').hidden = playing.langs.length < 2;
     $('#player-msg').textContent = cfg.title + ' · built in this browser from GitHub · progress is not saved';
     showGame();
   } catch (e) { $('#player-msg').textContent = ''; $('#player-frame').srcdoc = '<p style="font:14px system-ui;color:#f88;padding:16px">' + esc(e.message || e) + '</p>'; }
 }
 $('#player-restart').addEventListener('click', () => { if (playing) showGame(); });
+$('#player-lang').addEventListener('change', () => { if (playing) showGame(); });
 $('#player-close').addEventListener('click', () => { $('#player').hidden = true; $('#player-frame').srcdoc = ''; playing = null; });
 document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('#player').hidden) $('#player-close').click(); });
 async function gamePage(gameSha, id, kitOverlay) {
@@ -764,7 +774,7 @@ async function artView() {
       el('div', { class: 'row' }, ...picker({ kind: 'splash' }, 'image/*', 'splash', setBg), el('label', { class: 'inline', for: 'splash-bg' }, bgIn, 'Color around it (also while the app starts)'))));
 
     // icons
-    const iconNames = [...new Set(M.icons.required.concat(current.filter(p => p.startsWith('icons/')).map(p => p.slice(6).replace(/\.[^.]+$/, ''))))].sort();
+    const iconNames = [...new Set(M.icons.required.concat(M.icons.optional || [], current.filter(p => p.startsWith('icons/')).map(p => p.slice(6).replace(/\.[^.]+$/, ''))))].sort();
     const icons = await pool(iconNames, 6, async n => {
       const p = [...staged.keys()].find(k => k.startsWith('icons/' + n + '.') && staged.get(k).bytes) || current.find(k => k.startsWith('icons/' + n + '.') && !(staged.has(k) && !staged.get(k).bytes));
       const changed = [...staged.keys()].some(k => k.startsWith('icons/' + n + '.'));

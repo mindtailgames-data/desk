@@ -134,7 +134,7 @@ export async function splashBackground(kit) {
   return typeof bg === 'string' && /^#[0-9a-fA-F]{6}$/.test(bg) ? bg : '#0a1233';
 }
 
-export async function buildPage(kit, cfg, { levels = null, gameCss = '', gameHtml = '', gameScripts = [] } = {}) {
+export async function buildPage(kit, cfg, { levels = null, gameCss = '', gameHtml = '', gameScripts = [], texts = null, levelsTr = null } = {}) {
   checkPublic(cfg);
   cfg = JSON.parse(JSON.stringify(cfg));
   if (!cfg.modules) cfg.modules = {};
@@ -160,6 +160,11 @@ export async function buildPage(kit, cfg, { levels = null, gameCss = '', gameHtm
   let pre = 'window.DK_ART = ' + pyJson(art) + ';\n';
   if (skin.celebration) pre += 'window.DK_CELEBRATION = ' + skin.celebration + ';\n';
   if (levels !== null) pre += 'window.DK_LEVELS = ' + pyJson(levels) + ';\n';
+  if ((cfg.languages || []).includes('tr')) {   // a game in Turkish too: the kit's Turkish, then the game's own (tr.json)
+    const tr = Object.assign(JSON.parse(await kit.text('core/lang/tr.json')), texts || {});
+    pre += 'window.DK_TEXTS = ' + pyJson({ tr }) + ';\n';
+    if (levelsTr !== null) pre += 'window.DK_LEVELS_TR = ' + pyJson(levelsTr) + ';\n';   // its own Turkish levels (levels.tr.json)
+  }
   return '<!DOCTYPE html>\n<html lang="en">\n<head>\n<meta charset="utf-8">\n' +
     '<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">\n' +
     '<meta name="theme-color" content="' + (theme.bg2 || '#2c2560') + '">\n<title>' + cfg.title + '</title>\n<style>\n' + cssAll + '\n' + gameCss + '\n</style>\n</head>\n<body>\n' +
@@ -218,8 +223,13 @@ export async function buildGame(kit, game, { links = null, bots = true } = {}) {
   cfg.links = links || { support: '', terms: '', privacy: '' };
   if (!('analytics' in cfg)) { const a = []; for (let n = 10; n <= submitted.length; n += 10) a.push(n); cfg.analytics = { levelAchieved: a }; }
   const levels = fillLevels(cfg.id, await inlineImages(game, files, submitted));
+  let texts = null, levelsTr = null;
+  if ((cfg.languages || []).includes('tr')) {
+    texts = files.includes('tr.json') ? JSON.parse(await game.text('tr.json')) : {};
+    if (files.includes('levels.tr.json')) { const lt = JSON.parse(await game.text('levels.tr.json')); levelsTr = fillLevels(cfg.id, await inlineImages(game, files, Array.isArray(lt) ? lt : lt.levels)); }
+  }
   const wrap = code => '(function () {\n' + code + '\n})();';
   const scripts = [['dk-game', wrap(gameJs)]];
   if (botJs !== null) scripts.push(['dk-bot', 'window.DK_TESTING = true;\n' + wrap(botJs)]);
-  return { cfg, levels, page: await buildPage(kit, cfg, { levels, gameCss, gameScripts: scripts }) };
+  return { cfg, levels, page: await buildPage(kit, cfg, { levels, gameCss, gameScripts: scripts, texts, levelsTr }) };
 }
