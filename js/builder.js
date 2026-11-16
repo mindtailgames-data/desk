@@ -211,6 +211,29 @@ async function inlineImages(game, files, levels) {
   return levels;
 }
 
+// ---------- the game's picture files: .png/.webp in subfolders (kit/build/build_game.py game_files) ----------
+// The build puts them next to the page (files/<path>); this site's player has no files next to its page, so it hands them
+// to the game as window.DK_FILES (path -> data: URI; kit.js DK.file).
+export async function gameFiles(game) {
+  const out = [];
+  const walk = async (dir, top) => {
+    for (const n of (await game.list(dir)).sort()) {
+      if (top && (n === 'dist' || n === 'node_modules' || n === 'tools')) continue;
+      if (n.startsWith('.')) continue;
+      const p = dir ? dir + '/' + n : n;
+      if (/\.(png|webp)$/i.test(n)) { if (!top) out.push(p); }
+      else { let sub = []; try { sub = await game.list(p); } catch (e) {} if (sub.length) await walk(p, false); }   // (a folder: its pictures too)
+    }
+  };
+  await walk('', true);
+  return out.sort();
+}
+export async function filesScript(game, paths) {
+  const m = {};
+  for (const p of paths) m[p] = 'data:' + (MIME[p.split('.').pop().toLowerCase()] || 'application/octet-stream') + ';base64,' + base64(await game.bytes(p));
+  return '<script>window.DK_FILES=' + JSON.stringify(m).replace(/</g, '\\u003c') + ';<\/script>\n';
+}
+
 // ---------- build settings (the Builds page; the release build's "settings"): they win over game.json ----------
 // The same as kit/build/build_game.py settings_errors() and apply_settings(). Each one is optional:
 // { flow: X (2-15; 0 off), startCoins, playOnCost, refillCost, rewards: { normal, hard, superhard }, boosterStart, boosterPrice,
@@ -282,5 +305,7 @@ export async function buildGame(kit, game, { links = null, bots = true, settings
   const wrap = code => '(function () {\n' + code + '\n})();';
   const scripts = [['dk-game', wrap(gameJs)]];
   if (botJs !== null) scripts.push(['dk-bot', 'window.DK_TESTING = true;\n' + wrap(botJs)]);
-  return { cfg, levels, page: await buildPage(kit, cfg, { levels, gameCss, gameScripts: scripts, texts, levelsTr }) };
+  const page = await buildPage(kit, cfg, { levels, gameCss, gameScripts: scripts, texts, levelsTr });
+  const paths = await gameFiles(game);   // (the picture files: for this site's player only, never in the page)
+  return { cfg, levels, page, files: paths.length ? await filesScript(game, paths) : '' };
 }

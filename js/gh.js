@@ -81,8 +81,10 @@ export function client(token) {
     const exists = !!parent;
     if (!exists) parent = (await get('/repos/' + repo + '/git/ref/heads/' + encodeRef(base))).object.sha;
     const parentCommit = await get('/repos/' + repo + '/git/commits/' + parent);
-    const entries = [];
+    const entries = [], have = await tree(repo, parent);
     for (const f of write) {
+      const e = have.get(f.path);
+      if (e && e.sha === await gitBlobSha(f.bytes)) continue;   // (the same file is already there: nothing to upload)
       const b = await req('POST', '/repos/' + repo + '/git/blobs', { content: bytesToB64(f.bytes), encoding: 'base64' });
       entries.push({ path: f.path, mode: '100644', type: 'blob', sha: b.sha });
     }
@@ -98,6 +100,12 @@ export function client(token) {
     blob, tree, reader, commitFiles };
 }
 
+// git's id of a file: SHA-1 of "blob <size>\0" and the bytes (the same id GitHub gives it)
+export async function gitBlobSha(bytes) {
+  const head = new TextEncoder().encode('blob ' + bytes.length + '\0'), all = new Uint8Array(head.length + bytes.length);
+  all.set(head); all.set(bytes, head.length);
+  return [...new Uint8Array(await crypto.subtle.digest('SHA-1', all))].map(b => b.toString(16).padStart(2, '0')).join('');
+}
 const encodeRef = r => r.split('/').map(encodeURIComponent).join('/');
 export function b64ToBytes(b64) {
   const s = atob(b64.replace(/\s/g, '')), out = new Uint8Array(s.length);

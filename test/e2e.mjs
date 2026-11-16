@@ -375,7 +375,10 @@ try {
   await p.click('button:has-text("Play it here first")');
   ok('submit: "Play it here first" runs the folder with the kit from main', await frame(p).locator('#dk-home').waitFor({ timeout: 60000 }).then(() => true, () => false));
   await p.click('#player-close');
+  const n0 = calls.length;
   await p.click('button:has-text("Resubmit #9")'); await until(p, 'Resubmitted and reopened');
+  const blobPosts = calls.slice(n0).filter(c => c.method === 'POST' && c.path === '/git/blobs').length;
+  ok('resubmit: files already on the branch are not uploaded again', blobPosts < listed.length, blobPosts + ' of ' + listed.length + ' files uploaded');
   const b9 = refOf(FAC, 'submit/mygame');
   ok('resubmit: the declined #9 is reopened (no new pull request), with a note', pulls.find(x => x.number === 9).state === 'open' && !calls.some(c => c.method === 'POST' && c.path === '/pulls') && (comments[9] || []).some(c => /Resubmitted from Desk/.test(c.body)));
   ok('resubmit: the branch holds the folder as it is now', JSON.parse(fileAt(FAC, b9, 'games/mygame/game.json')).title === 'My Game' && !!fileAt(FAC, b9, 'games/mygame/bot.js'));

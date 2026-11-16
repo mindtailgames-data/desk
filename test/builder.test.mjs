@@ -1,6 +1,6 @@
 // node test/builder.test.mjs <factory folder>: the browser builder must make exactly the page Python makes
 import fs from 'fs'; import path from 'path'; import { execFileSync } from 'child_process';
-import { buildGame, settingsErrors } from '../js/builder.js';
+import { buildGame, settingsErrors, gameFiles } from '../js/builder.js';
 import os from 'os';
 const F = process.argv[2];
 const reader = root => ({
@@ -39,5 +39,12 @@ for (const st of BAD) {
   if (out === js && JSON.parse(js).length) console.log('✓ refused by both: ' + JSON.stringify(st));
   else { fails++; console.log('✗ settings ' + JSON.stringify(st) + '\n  js: ' + js + '\n  py: ' + out); }
 }
+// the picture files (subfolders): this site finds exactly the files the Python build ships
+const pg = path.join(tmp, 'pics');
+for (const f of ['game.json', 'icon.png', 'art/a.webp', 'art/sheets.v2/b.png', 'art/sheets.v2/deep/c.webp', 'art/notes.txt', 'dist/x.webp', 'node_modules/y.png', '.hidden/z.webp', 'tools/d.png', 'more/E.PNG'])
+  { fs.mkdirSync(path.dirname(path.join(pg, f)), { recursive: true }); fs.writeFileSync(path.join(pg, f), 'x'); }
+const pyFiles = execFileSync('python3', ['-c', 'import sys,json; sys.path.insert(0, sys.argv[1]); import build_game as b; print(json.dumps(b.game_files(sys.argv[2]), separators=(",", ":")))', path.join(F, 'kit', 'build'), pg]).toString().trim();
+const jsFiles = JSON.stringify(await gameFiles(reader(pg)));
+if (pyFiles === jsFiles) console.log('✓ the same picture files: ' + jsFiles); else { fails++; console.log('✗ picture files\n  js: ' + jsFiles + '\n  py: ' + pyFiles); }
 fs.rmSync(tmp, { recursive: true, force: true });
 process.exit(fails ? 1 : 0);

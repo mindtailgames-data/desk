@@ -2,7 +2,7 @@
 // token; nothing is stored anywhere but in this browser's memory (and the token in this browser, if asked to).
 import { sealForGitHub } from './seal.js';
 import { client, session, GitHubError } from './gh.js';
-import { buildGame, settingsOf, settingsErrors, MILESTONE_LEVELS } from './builder.js';
+import { buildGame, settingsOf, settingsErrors, MILESTONE_LEVELS, filesScript } from './builder.js';
 import { render as renderMd, esc } from './md.js';
 import { prepare } from './art.js';
 
@@ -195,7 +195,7 @@ window.addEventListener('message', e => {
 function showGame() {
   const lvl = Math.max(1, parseInt($('#player-level').value, 10) || 1);
   const lang = playing.langs.length > 1 ? $('#player-lang').value : null;
-  let page = playing.page.replace('<head>\n', () => '<head>\n' + storageShim(playing.id, lvl, lang) + fpsMeter());
+  let page = playing.page.replace('<head>\n', () => '<head>\n' + storageShim(playing.id, lvl, lang) + fpsMeter() + playing.files);
   $('#player-fps').textContent = '… fps'; $('#player-fps').className = 'chip';
   if (playing.screens) page = page.replace(/<\/body>\n<\/html>\n$/, () => '<script>\n' + playing.screens + '\n</script>\n</body>\n</html>\n');
   $('#player-frame').srcdoc = page;
@@ -208,8 +208,8 @@ async function play(title, makePage, opts) {
   $('#player').hidden = false; $('#player-title').textContent = title; $('#player-msg').textContent = 'Building the game from GitHub…';
   $('#player-frame').srcdoc = '<p style="font:14px system-ui;color:#999;padding:16px">Building…</p>';
   try {
-    const { page, cfg, screens } = await makePage();
-    playing = { title, page, id: cfg.id, screens: opts && opts.screens && screens && !screens.toLowerCase().includes('</script') ? screens : null, langs: Array.isArray(cfg.languages) && cfg.languages.length ? cfg.languages : ['en'] };
+    const { page, cfg, screens, files } = await makePage();
+    playing = { title, page, files: typeof files === 'string' ? files : '', id: cfg.id, screens: opts && opts.screens && screens && !screens.toLowerCase().includes('</script') ? screens : null, langs: Array.isArray(cfg.languages) && cfg.languages.length ? cfg.languages : ['en'] };
     $('#player-screen').hidden = !playing.screens;
     // a game in two languages: play it in either (the game's own Settings can switch too)
     $('#player-lang').replaceChildren(...playing.langs.map(l => el('option', { value: l, text: ({ en: 'English', tr: 'Türkçe' })[l] || l })));
@@ -424,6 +424,12 @@ async function precheck(files) {
   if (odd.length) problems.push('file types the factory does not take: ' + odd.join(', '));
   const big = files.filter(f => f.file.size > 5e6).map(f => f.rel);
   if (big.length) problems.push('files over 5 MB: ' + big.join(', '));
+  // the picture files (pictures in subfolders, kit/build/build_game.py): at most 200, 50 MB in all
+  const pics = files.filter(f => f.rel.includes('/') && !f.rel.startsWith('tools/') && /\.(png|webp)$/i.test(f.rel)), picBytes = pics.reduce((a, f) => a + f.file.size, 0);
+  if (pics.length > 200) problems.push(pics.length + ' picture files in subfolders (at most 200): pack small pictures into sprite sheets');
+  if (picBytes > 50 * 1048576) problems.push('picture files ' + (picBytes / 1048576).toFixed(1) + ' MB in all (at most 50 MB)');
+  const badPath = pics.filter(f => !/^[A-Za-z0-9_-]+(\/[A-Za-z0-9_.-]+)*\/[A-Za-z0-9_.-]+\.(png|webp)$/.test(f.rel)).map(f => f.rel);
+  if (badPath.length) problems.push('use only letters, digits, - _ . in folder and file names: ' + badPath.slice(0, 5).join(', '));
   let cfg = null, levels = null;
   if (names.includes('game.json')) { try { cfg = JSON.parse(await files.find(f => f.rel === 'game.json').file.text()); } catch (e) { problems.push('game.json is not valid JSON (' + e.message + ')'); } }
   if (cfg && !/^[a-z][a-z0-9]{2,29}$/.test(cfg.id || '')) problems.push('game.json "id" must be 3-30 lowercase letters/digits, starting with a letter');
@@ -657,7 +663,10 @@ async function buildsView() {
       const all = bdl.paths().filter(x => x.startsWith(dir)).map(x => x.slice(dir.length));
       const pick = re => all.find(x => re.test(x));
       const out = el('div', { class: 'row small' });
-      if (all.includes('game.html')) out.append(el('button', { type: 'button', text: 'Play', onclick: () => play(r.game + ' · ' + r.versionCode + ' · ' + r.environment, async () => ({ page: await bdl.text(dir + 'game.html'), cfg: { id: r.game, title: r.game + ' ' + r.versionCode } })) }));
+      if (all.includes('game.html')) out.append(el('button', { type: 'button', text: 'Play', onclick: () => play(r.game + ' · ' + r.versionCode + ' · ' + r.environment, async () => {
+        const pics = all.filter(x => x.startsWith('files/')).map(x => x.slice(6));   // (the build's picture files, if the game has them)
+        return { page: await bdl.text(dir + 'game.html'), cfg: { id: r.game, title: r.game + ' ' + r.versionCode }, files: pics.length ? await filesScript({ bytes: p => bdl.bytes(dir + 'files/' + p) }, pics) : '' };
+      }) }));
       for (const [re, label] of [[/\.apk$/, '.apk'], [/\.aab$/, '.aab'], [/^(play|store)\/[^/]*icon[^/]*\.png$/, 'Store icon'], [/^(play|store)\/[^/]*feature[^/]*\.(jpg|png)$/, 'Feature graphic'], [/-store\.zip$/, 'Store input (zip)'], [/^report\.md$/, 'Report']]) {
         const f = pick(re); if (f) out.append(dlButton(bdl, dir + f, f.split('/').pop(), label + fileSize(bdl, dir + f)));
       }
