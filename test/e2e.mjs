@@ -419,10 +419,30 @@ try {
   ok('builds: the links start from defaults.json, the package from the last build or the prefix', await p.inputValue('#b-terms') === (defs.terms || '') && await p.inputValue('#b-privacy') === (defs.privacy || '') && pkgNow === (lastPkg ? lastPkg.package : (defs.packagePrefix || 'com.duste.') + 'sortdemo'), pkgNow);
   await p.fill('#b-terms', 'ftp://wrong'); await p.click('button:has-text("Review and start")');
   ok('builds: a wrong link is caught before anything starts', (await viewText(p)).includes('Terms URL starting with https://') && !calls.some(c => c.path.endsWith('/dispatches')));
+  // the game settings of the build: from the game's own values; a wrong value is caught; they can be played first
+  await p.waitForSelector('#b-coins', { timeout: 15000 });
+  ok('builds: the game settings start from the game\'s own values', await p.inputValue('#b-coins') === '3600' && await p.inputValue('#b-playon') === '300' && await p.inputValue('#b-refill') === '300' && await p.inputValue('#b-r-hard') === '50' && await p.inputValue('#b-ms50-c') === '5000' && !(await p.isChecked('#b-flow')) && await p.isDisabled('#b-flow-to'));
   await p.fill('#b-terms', 'https://example.com/terms'); await p.fill('#b-vc', '1234');
+  await p.check('#b-flow'); await p.selectOption('#b-flow-to', '5'); await p.fill('#b-coins', '1000'); await p.fill('#b-bprice', '');
+  await p.click('button:has-text("Review and start")');
+  ok('builds: a wrong game setting is caught before anything starts', (await viewText(p)).includes('Game settings: boosterPrice') && !calls.some(c => c.path.endsWith('/dispatches')));
+  await p.fill('#b-bprice', '450');
+  await p.click('button:has-text("Play with these settings")');
+  const pf = p.frameLocator('#player-frame');
+  await pf.locator('#dk-frame').waitFor({ timeout: 30000 });
+  let played = null;
+  for (let k = 0; k < 60 && !(played && played.level); k++) {   // (the frame shows "Building…" first, then the game)
+    played = await pf.locator('#dk-frame').evaluate(() => window.DK && DK.flow && DK.screen.cur === 'game' ? { upTo: DK.cfg.flow && DK.cfg.flow.upTo, coins: DK.economy.coins(), level: DK.flow.current() && DK.flow.current().n } : null, null, { timeout: 2000 }).catch(() => null);
+    if (!(played && played.level)) await p.waitForTimeout(500);
+  }
+  const diag = played ? '' : ' msg=' + await p.innerText('#player-msg').catch(() => '?') + ' frame=' + (await pf.locator('body').innerText({ timeout: 2000 }).catch(e => 'ERR ' + e.message)).slice(0, 200) + ' dk=' + await pf.locator('body').evaluate(() => JSON.stringify({ dk: !!window.DK, scr: window.DK && DK.screen && DK.screen.cur, flow: window.DK && DK.cfg && DK.cfg.flow })).catch(e => e.message.slice(0, 100));
+  ok('builds: "Play with these settings" plays them (non-stop flow from level 1, the coins)', played && played.upTo === 5 && played.coins === 1000 && played.level === 1, JSON.stringify(played) + diag);
+  await p.click('#player-close');
   await p.click('button:has-text("Review and start")'); await p.click('button.danger:has-text("Start the build")'); await until(p, 'Started.');
   const disp = calls.find(c => c.path.endsWith('/dispatches'));
   ok('builds: the build starts with exactly the form\'s values', disp && disp.repo === REL_NAME && disp.body.inputs.game === 'sortdemo' && disp.body.inputs.source === 'main' && disp.body.inputs.terms_url === 'https://example.com/terms' && disp.body.inputs.version_code === '1234' && disp.body.inputs.adjust_environment === 'sandbox', disp && JSON.stringify(disp.body.inputs));
+  const sent = disp && JSON.parse(disp.body.inputs.settings || 'null');
+  ok('builds: the game settings go with the build', sent && sent.flow === 5 && sent.startCoins === 1000 && sent.boosterPrice === 450 && sent.playOnCost === 300 && sent.milestones.length === 5, disp && disp.body.inputs.settings);
   ok('builds: the recent builds list', await p.waitForSelector('#view >> text=Release sortdemo', { timeout: 15000 }).then(() => true, () => false));
   // Adjust tokens: sealed in the browser, opened only by "GitHub" (the stand-in, with its own key)
   await p.waitForSelector('#adjust button:has-text("Save the app token")');
@@ -434,6 +454,8 @@ try {
   const putApp = calls.find(c => c.method === 'PUT' && c.path === '/actions/secrets/ADJUST_APP_TOKEN_SORTDEMO');
   ok('adjust: the app token reaches GitHub sealed, and opens to exactly what was typed', putApp && !JSON.stringify(putApp.body).includes('abc123XYZ789') && secrets.get('ADJUST_APP_TOKEN_SORTDEMO').value === 'abc123XYZ789');
   await p.waitForSelector('#adjust input[data-event="day_1_login"]', { timeout: 10000 });
+  const evNames = await p.$$eval('#adjust input[data-event]', xs => xs.map(x => x.dataset.event));
+  ok('adjust: the form lists the kit\'s events too', ['level_1_started', 'level_1_achieved', 'level_2_achieved', 'level_3_achieved', 'level_5_achieved', 'level_10_achieved', 'played_5_mins', 'played_10_mins', 'coins_below_threshold', 'day_3_login'].every(n => evNames.includes(n)) && !evNames.includes('coins_below_100'), evNames.join(','));
   await p.fill('#adjust input[data-event="day_1_login"]', 'aaa111'); await p.fill('#adjust input[data-event="level_10_achieved"]', 'bbb222');
   await p.click('#adjust button:has-text("Save the event tokens")');
   ok('adjust: before saving, it says which events stay empty', (await p.innerText('#adjust')).includes('These stay empty and will not be sent'));
@@ -441,6 +463,9 @@ try {
   const ev = (secrets.get('ADJUST_EVENTS_SORTDEMO') || {}).value || '';
   ok('adjust: the event tokens are saved together, one event=token per line', ev.split('\n').sort().join(',') === 'day_1_login=aaa111,level_10_achieved=bbb222', ev);
   await shot(p, 'builds');
+  await p.goto(ORIGIN + '/#builds'); await until(p, 'New build'); await p.selectOption('#b-game', 'sortdemo'); await p.waitForSelector('#b-coins', { timeout: 15000 });
+  await p.waitForFunction(() => document.querySelector('#b-coins') && document.querySelector('#b-coins').value === '1000', null, { timeout: 10000 }).catch(() => {});
+  ok('builds: the game settings are remembered for the game', await p.isChecked('#b-flow') && await p.inputValue('#b-flow-to') === '5' && await p.inputValue('#b-coins') === '1000' && await p.inputValue('#b-bprice') === '450');
   if (lastRel) {
     const hist = await viewText(p);
     ok('builds: the release history from releases.json', hist.includes('Release history') && hist.includes(String(lastRel.versionCode)));

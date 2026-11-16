@@ -5,7 +5,7 @@
 const ORDER = ['economy', 'levels', 'audio', 'haptics', 'analytics', 'settings', 'flows', 'tutorial', 'boosters', 'home', 'milestones', 'splash'];
 const ALWAYS = new Set(['economy', 'levels', 'audio', 'haptics', 'analytics', 'settings', 'flows', 'tutorial', 'boosters', 'home', 'milestones', 'splash']);
 const FORBIDDEN_KEYS = ['token', 'secret', 'password', 'keystore', 'apikey', 'api_key'];
-const DEFAULT_ECONOMY = { startCoins: 3600, maxLives: 5, lifeMinutes: 30, playOnCost: 300, rewards: { normal: 25, hard: 50, superhard: 100 } };
+export const DEFAULT_ECONOMY = { startCoins: 3600, maxLives: 5, lifeMinutes: 30, playOnCost: 300, refillCost: 300, rewards: { normal: 25, hard: 50, superhard: 100 } };
 const MIME = { svg: 'image/svg+xml', png: 'image/png', webp: 'image/webp', jpg: 'image/jpeg', jpeg: 'image/jpeg', woff2: 'font/woff2',
   mp3: 'audio/mpeg', ogg: 'audio/ogg', wav: 'audio/x-wav', m4a: 'audio/mp4' };
 
@@ -211,8 +211,58 @@ async function inlineImages(game, files, levels) {
   return levels;
 }
 
+// ---------- build settings (the Builds page; the release build's "settings"): they win over game.json ----------
+// The same as kit/build/build_game.py settings_errors() and apply_settings(). Each one is optional:
+// { flow: X (2-15; 0 off), startCoins, playOnCost, refillCost, rewards: { normal, hard, superhard }, boosterStart, boosterPrice,
+//   milestones: [{ level: 10, coins, boosters }, ... 20, 30, 40, 50] }
+export const MILESTONE_LEVELS = [10, 20, 30, 40, 50];
+// the kit's defaults when nothing is set (kit/modules/boosters.js, kit/modules/milestones.js)
+export const DEFAULT_BOOSTER = { start: 4, bundle: 3, price: 500 };
+export const DEFAULT_MILESTONES = [{ level: 10, coins: 500, boosters: 1 }, { level: 20, coins: 1000, boosters: 2 }, { level: 30, coins: 2000, boosters: 3 }, { level: 40, coins: 3000, boosters: 4 }, { level: 50, coins: 5000, boosters: 5 }];
+// what a game plays with today, as build settings: game.json over the kit's defaults (the non-stop flow off)
+export function settingsOf(cfg) {
+  const eco = Object.assign({}, DEFAULT_ECONOMY, cfg.economy || {}), b = Object.assign({}, DEFAULT_BOOSTER, (cfg.boosters || [])[0] || {});
+  const r = Object.assign({}, DEFAULT_ECONOMY.rewards, eco.rewards || {});
+  return { flow: cfg.flow && cfg.flow.upTo || 0, startCoins: eco.startCoins, playOnCost: eco.playOnCost, refillCost: eco.refillCost, rewards: { normal: r.normal, hard: r.hard, superhard: r.superhard },
+    boosterStart: b.start, boosterPrice: b.price, milestones: (Array.isArray(cfg.milestones) && cfg.milestones.length === 5 ? cfg.milestones : DEFAULT_MILESTONES).map(x => ({ level: x.level, coins: x.coins, boosters: x.boosters })) };
+}
+export function settingsErrors(st) {
+  if (!st || typeof st !== 'object' || Array.isArray(st)) return ['the settings must be a JSON object'];
+  const errs = [], whole = (v, lo, hi) => Number.isInteger(v) && v >= lo && v <= hi, has = k => Object.prototype.hasOwnProperty.call(st, k);
+  const known = ['flow', 'startCoins', 'playOnCost', 'refillCost', 'rewards', 'boosterStart', 'boosterPrice', 'milestones'];
+  for (const k of Object.keys(st)) if (!known.includes(k)) errs.push('unknown setting "' + k + '"');
+  if (has('flow') && !(whole(st.flow, 0, 15) && st.flow !== 1)) errs.push('flow: 0 (off) or a level from 2 to 15');
+  for (const k of ['startCoins', 'playOnCost', 'refillCost', 'boosterPrice']) if (has(k) && !whole(st[k], 0, 1000000)) errs.push(k + ': a whole number from 0 to 1000000');
+  if (has('boosterStart') && !whole(st.boosterStart, 0, 99)) errs.push('boosterStart: a whole number from 0 to 99');
+  if (has('rewards')) {
+    const r = st.rewards;
+    if (!(r && typeof r === 'object' && !Array.isArray(r) && Object.keys(r).sort().join() === 'hard,normal,superhard' && Object.values(r).every(v => whole(v, 0, 1000000))))
+      errs.push('rewards: { "normal", "hard", "superhard" }, whole numbers from 0 to 1000000');
+  }
+  if (has('milestones')) {
+    const m = st.milestones;
+    if (!(Array.isArray(m) && m.map(x => x && typeof x === 'object' ? x.level : null).join() === MILESTONE_LEVELS.join()
+      && m.every(x => Object.keys(x).sort().join() === 'boosters,coins,level' && whole(x.coins, 0, 1000000) && whole(x.boosters, 0, 99))))
+      errs.push('milestones: levels 10, 20, 30, 40, 50, each { "level", "coins" (0-1000000), "boosters" (0-99) }');
+  }
+  return errs;
+}
+export function applySettings(cfg, st) {
+  const has = k => Object.prototype.hasOwnProperty.call(st, k);
+  if (has('flow')) { if (st.flow) cfg.flow = { upTo: st.flow }; else delete cfg.flow; }
+  const eco = Object.assign({}, cfg.economy || {});
+  for (const k of ['startCoins', 'playOnCost', 'refillCost']) if (has(k)) eco[k] = st[k];
+  if (has('rewards')) eco.rewards = { normal: st.rewards.normal, hard: st.rewards.hard, superhard: st.rewards.superhard };
+  if (Object.keys(eco).length) cfg.economy = eco;
+  if (Array.isArray(cfg.boosters) && cfg.boosters.length) {
+    cfg.boosters = cfg.boosters.map(b => { const c = Object.assign({}, b); if (has('boosterStart')) c.start = st.boosterStart; if (has('boosterPrice')) c.price = st.boosterPrice; return c; });
+  }
+  if (has('milestones')) cfg.milestones = st.milestones.map(x => ({ level: x.level, coins: x.coins, boosters: x.boosters }));
+  return cfg;
+}
+
 // game: a reader rooted at the game's folder (games/<id>/ or templates/starter/)
-export async function buildGame(kit, game, { links = null, bots = true } = {}) {
+export async function buildGame(kit, game, { links = null, bots = true, settings = null } = {}) {
   const files = await game.list('');
   const cfg = JSON.parse(await game.text('game.json'));
   const lv = JSON.parse(await game.text('levels.json'));
@@ -222,6 +272,7 @@ export async function buildGame(kit, game, { links = null, bots = true } = {}) {
   const botJs = bots && files.includes('bot.js') ? pyText(await game.text('bot.js')) : null;
   cfg.links = links || { support: '', terms: '', privacy: '' };
   if (!('analytics' in cfg)) { const a = []; for (let n = 10; n <= submitted.length; n += 10) a.push(n); cfg.analytics = { levelAchieved: a }; }
+  if (settings != null) { const errs = settingsErrors(settings); if (errs.length) throw new Error('build settings: ' + errs.join('; ')); applySettings(cfg, settings); }
   const levels = fillLevels(cfg.id, await inlineImages(game, files, submitted));
   let texts = null, levelsTr = null;
   if ((cfg.languages || []).includes('tr')) {

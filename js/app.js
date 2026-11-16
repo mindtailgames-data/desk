@@ -2,7 +2,7 @@
 // token; nothing is stored anywhere but in this browser's memory (and the token in this browser, if asked to).
 import { sealForGitHub } from './seal.js';
 import { client, session, GitHubError } from './gh.js';
-import { buildGame } from './builder.js';
+import { buildGame, settingsOf, settingsErrors, MILESTONE_LEVELS } from './builder.js';
 import { render as renderMd, esc } from './md.js';
 import { prepare } from './art.js';
 
@@ -222,12 +222,12 @@ $('#player-restart').addEventListener('click', () => { if (playing) showGame(); 
 $('#player-lang').addEventListener('change', () => { if (playing) showGame(); });
 $('#player-close').addEventListener('click', () => { $('#player').hidden = true; $('#player-frame').srcdoc = ''; playing = null; });
 document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('#player').hidden) $('#player-close').click(); });
-async function gamePage(gameSha, id, kitOverlay) {
+async function gamePage(gameSha, id, kitOverlay, settings) {
   const kitSha = await mainSha();
   let kit = await S.gh.reader(S.factory, kitSha, 'kit');
   if (kitOverlay) kit = kitOverlay(kit);
   const game = id === '@starter' ? await S.gh.reader(S.factory, kitSha, 'templates/starter') : await S.gh.reader(S.factory, gameSha, 'games/' + id);
-  return buildGame(kit, game, { bots: false });
+  return buildGame(kit, game, { bots: false, settings: settings || null });
 }
 
 // ---------- downloads: the "downloads" branch of a repository (test apps of submissions; files of release builds) ----------
@@ -498,6 +498,68 @@ async function reviewSubmission(files, out) {
 }
 
 // ---------- Builds (owner) ----------
+// ---------- build settings: the non-stop flow and the economy of one game's builds (they win over game.json) ----------
+// Remembered for each game: the form starts from the newest of the settings last started from this browser and the
+// settings of the game's last build (releases.json, so also on another computer); else from what the game plays with
+// today (game.json over the kit's defaults).
+const SETTINGS_KEY = id => 'desk.settings.' + id;
+function savedSettings(id, rel) {
+  let local = null; try { local = JSON.parse(localStorage.getItem(SETTINGS_KEY(id)) || 'null'); } catch (e) {}
+  const last = rel.filter(r => r.game === id && r.settings && typeof r.settings === 'object').slice(-1)[0];
+  const relAt = last ? Date.parse(String(last.date).replace(' UTC', 'Z').replace(' ', 'T')) || 0 : 0;
+  const pick = local && local.settings && (!last || (local.at || 0) >= relAt) ? { settings: local.settings, from: 'the last build started from this browser' }
+    : last ? { settings: last.settings, from: 'the last build (' + last.versionCode + ', ' + last.environment + ')' } : null;
+  return pick && !settingsErrors(pick.settings).length ? pick : null;
+}
+function settingsCard(gameSelect, rel, playIt) {
+  const box = el('div', { class: 'stack wide', id: 'b-settings' });
+  let ask = 0, base = null, fields = null;
+  const num = (id, label, help) => { const i = el('input', { id, type: 'number', min: '0', step: '1', inputmode: 'numeric' }); return { i, l: el('label', { for: id }, label, i, ...(help ? [el('span', { class: 'small muted', text: help })] : [])) }; };
+  const read = () => {   // the form as settings (NaN where a field is not a whole number: settingsErrors names it)
+    const v = f => { const t = f.i.value.trim(); return /^\d+$/.test(t) ? parseInt(t, 10) : NaN; };
+    return { flow: fields.flowOn.checked ? parseInt(fields.flowTo.value, 10) : 0, startCoins: v(fields.startCoins), playOnCost: v(fields.playOnCost), refillCost: v(fields.refillCost),
+      rewards: { normal: v(fields.normal), hard: v(fields.hard), superhard: v(fields.superhard) }, boosterStart: v(fields.boosterStart), boosterPrice: v(fields.boosterPrice),
+      milestones: MILESTONE_LEVELS.map((level, k) => ({ level, coins: v(fields.ms[k][0]), boosters: v(fields.ms[k][1]) })) };
+  };
+  const fill = st => {
+    fields.flowOn.checked = !!st.flow; fields.flowTo.value = String(st.flow || 10); fields.flowTo.disabled = !st.flow;
+    for (const k of ['startCoins', 'playOnCost', 'refillCost', 'boosterStart', 'boosterPrice']) fields[k].i.value = st[k];
+    for (const k of ['normal', 'hard', 'superhard']) fields[k].i.value = st.rewards[k];
+    st.milestones.forEach((m, k) => { fields.ms[k][0].i.value = m.coins; fields.ms[k][1].i.value = m.boosters; });
+  };
+  const draw = async () => {
+    const n = ++ask, id = gameSelect.value;
+    box.replaceChildren(el('h3', { text: 'Game settings for this build' }), el('p', { class: 'muted small', text: 'Loading…' }));
+    let cfg = {}, bundle = 3, boosters = 0;
+    try { const rd = await S.gh.reader(S.factory, await mainSha(), 'games/' + id); cfg = JSON.parse(await rd.text('game.json')); } catch (e) {
+      try { const p = (await prs('open')).find(x => x.head.ref === 'submit/' + id); if (p) cfg = JSON.parse(await (await S.gh.reader(S.factory, p.head.sha, 'games/' + id)).text('game.json')); } catch (x) {}
+    }
+    if (n !== ask) return;
+    base = settingsOf(cfg); boosters = (cfg.boosters || []).length; bundle = ((cfg.boosters || [])[0] || {}).bundle || 3;
+    const saved = savedSettings(id, rel);
+    fields = { flowOn: el('input', { type: 'checkbox', id: 'b-flow' }), flowTo: el('select', { id: 'b-flow-to', style: 'width:auto' }, ...Array.from({ length: 14 }, (_, k) => el('option', { value: String(k + 2), text: 'up to level ' + (k + 2) }))),
+      startCoins: num('b-coins', 'Starting coins'), playOnCost: num('b-playon', 'Play On cost', 'coins_below_threshold is sent when the coins drop below this'), refillCost: num('b-refill', 'Refill cost (all lives back)'),
+      normal: num('b-r-normal', 'Win reward: normal level'), hard: num('b-r-hard', 'Win reward: hard level'), superhard: num('b-r-superhard', 'Win reward: super hard level'),
+      boosterStart: num('b-bstart', 'Starting boosters (of each booster)'), boosterPrice: num('b-bprice', 'Price for ' + bundle + ' boosters'),
+      ms: MILESTONE_LEVELS.map(lv => [num('b-ms' + lv + '-c', 'Level ' + lv + ' milestone: coins'), num('b-ms' + lv + '-b', 'Level ' + lv + ' milestone: boosters (of each)')]) };
+    fields.flowOn.addEventListener('change', () => { fields.flowTo.disabled = !fields.flowOn.checked; });
+    fill(saved ? saved.settings : base);
+    const reset = el('button', { type: 'button', class: 'ghost', text: 'Back to the game\'s own values', onclick: () => fill(base) });
+    const tryIt = el('button', { type: 'button', class: 'ghost', text: 'Play with these settings', onclick: () => { const st = read(), errs = settingsErrors(st); if (errs.length) { tryMsg.replaceChildren(note('bad', 'Check the settings: ' + errs.join('; ') + '.')); return; } tryMsg.replaceChildren(); playIt(st); } });
+    const tryMsg = el('div', { class: 'stack' });
+    box.replaceChildren(el('h3', { text: 'Game settings for this build' }),
+      el('p', { class: 'small muted', text: (saved ? 'From ' + saved.from + '.' : 'The game\'s own values (game.json, else the kit\'s defaults).') + ' These win over game.json in this build (and in the checklist it runs). Remembered for this game: the next build starts from them.' }),
+      el('div', { class: 'stack' }, el('div', { class: 'row' }, el('label', { class: 'inline', for: 'b-flow' }, fields.flowOn, 'Non-stop flow'), fields.flowTo),
+        el('p', { class: 'small muted', text: 'First launch: from the splash straight into level 1. Levels before the chosen one: no win screen, the next level slides in (life and coins as always). The chosen level: the win screen, then home. Quit or a closed FAILED: home, and Play goes on in the flow. A later launch opens home.' })),
+      el('div', { class: 'form' }, ...['startCoins', 'playOnCost', 'refillCost', 'normal', 'hard', 'superhard'].map(k => fields[k].l)),
+      el('div', { class: 'form' }, fields.boosterStart.l, fields.boosterPrice.l, ...(boosters ? [] : [el('p', { class: 'small muted wide', text: 'This game has no boosters: the two booster settings change nothing.' })])),
+      el('div', { class: 'form' }, ...fields.ms.flatMap(([c, b]) => [c.l, b.l])),
+      el('div', { class: 'row' }, tryIt, reset), tryMsg);
+  };
+  gameSelect.addEventListener('change', draw); draw();
+  return { box, read: () => fields ? read() : null, remember: (id, st) => { try { localStorage.setItem(SETTINGS_KEY(id), JSON.stringify({ at: Date.now(), settings: st })); } catch (e) {} } };
+}
+
 async function buildsView() {
   const view = cur;
   if (!S.canBuild) { page(view, 'Builds', ''); view.append(note('warn', 'Builds need the release repository. Only the owner has access to it.')); return; }
@@ -550,6 +612,10 @@ async function buildsView() {
     };
     const syncEnv = () => { const branch = source.value !== 'main'; envP.disabled = branch; if (branch) envS.checked = true; checkVersion(); };
     game.addEventListener('change', sync); source.addEventListener('change', syncEnv); envS.addEventListener('change', checkVersion); envP.addEventListener('change', checkVersion); sync();
+    const setts = settingsCard(game, rel, st => {
+      const id = game.value, br = open.find(p => p.head.ref === source.value);
+      play(id + ' · with the build settings', async () => gamePage(br ? br.head.sha : await mainSha(), id, null, st));
+    });
     const msg = el('div', { class: 'stack' });
     const start = el('button', { type: 'button', text: 'Review and start' });
     start.addEventListener('click', () => {
@@ -558,11 +624,14 @@ async function buildsView() {
       if (!/^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$/.test(pkg.value.trim())) errs.push('Package name like com.duste.' + game.value);
       if (!/^https:\/\/\S+$/.test(email.value.trim()) && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email.value.trim())) errs.push('A Support link starting with https:// (or an e-mail address)');
       for (const [n, f] of [['Terms', terms], ['Privacy', privacy]]) if (!/^https:\/\/\S+$/.test(f.value.trim())) errs.push(n + ' URL starting with https://');
+      const st = setts.read();
+      if (!st) errs.push('the game settings (still loading)'); else errs.push(...settingsErrors(st).map(x => 'Game settings: ' + x));
       if (errs.length) { msg.replaceChildren(note('bad', 'Still needed: ' + errs.join('; ') + '.')); return; }
-      const inputs = { game: game.value, source: source.value, package: pkg.value.trim(), support_url: email.value.trim(), terms_url: terms.value.trim(), privacy_url: privacy.value.trim(), adjust_environment: env };
+      const inputs = { game: game.value, source: source.value, package: pkg.value.trim(), support_url: email.value.trim(), terms_url: terms.value.trim(), privacy_url: privacy.value.trim(), adjust_environment: env, settings: JSON.stringify(st) };
       if (vc.value) inputs.version_code = String(parseInt(vc.value, 10));
-      confirmBox(msg, 'Start a ' + env + ' build of ' + inputs.game + ' from ' + inputs.source + ' as ' + inputs.package + '?' + (env === 'production' ? ' (Production: the Adjust events count in the real numbers.)' : '') + (env === 'production' && verMsg ? ' Note: ' + verMsg : ''), 'Start the build', async () => {
+      confirmBox(msg, 'Start a ' + env + ' build of ' + inputs.game + ' from ' + inputs.source + ' as ' + inputs.package + (st.flow ? ', non-stop flow up to level ' + st.flow : ', no non-stop flow') + '?' + (env === 'production' ? ' (Production: the Adjust events count in the real numbers.)' : '') + (env === 'production' && verMsg ? ' Note: ' + verMsg : ''), 'Start the build', async () => {
         await S.gh.post(R() + '/actions/workflows/release.yml/dispatches', { ref: 'main', inputs });
+        setts.remember(inputs.game, st);
         msg.replaceChildren(note('good', 'Started. It appears in the list below within a few seconds and takes about 10–15 minutes.'));
         setTimeout(() => refreshRuns(runs), 4000);
       });
@@ -574,7 +643,7 @@ async function buildsView() {
         el('label', { for: 'b-vc' }, 'versionCode (empty: automatic)', vc),
         el('label', { for: 'b-email' }, 'Support link (the Support button in Settings)', email), el('label', { for: 'b-terms' }, 'Terms of use URL', terms), el('label', { for: 'b-privacy' }, 'Privacy policy URL', privacy),
         el('div', { class: 'stack wide' }, el('span', { class: 'small muted', text: 'Adjust environment' }),
-          el('div', { class: 'row' }, el('label', { class: 'inline', for: 'b-sandbox' }, envS, 'Sandbox (testing)'), el('label', { class: 'inline', for: 'b-production' }, envP, 'Production (store; only from main)'))), verNote),
+          el('div', { class: 'row' }, el('label', { class: 'inline', for: 'b-sandbox' }, envS, 'Sandbox (testing)'), el('label', { class: 'inline', for: 'b-production' }, envP, 'Production (store; only from main)'))), verNote, setts.box),
       el('p', { class: 'small muted', text: 'The package name and the three links are filled in for you (package: ' + (defaults.packagePrefix || 'com.duste.') + '<game id>; links: defaults.json in the release repository). Change any of them for this build if needed.' }),
       el('div', { class: 'row' }, start), msg));
     if (ids.length) view.append(adjustCard(game));
@@ -607,6 +676,8 @@ async function buildsView() {
 // never shown, kept or readable again (GitHub keeps secrets write-only). The build reads them by the game's id:
 // ADJUST_APP_TOKEN_<ID> and ADJUST_EVENTS_<ID> (one "event_name=token" per line).
 const DAY_EVENTS = ['day_1_login', 'day_2_login', 'day_3_login'];
+// the kit's own events (kit/modules/analytics.js): the same in every game
+const EARLY_LEVELS = [1, 2, 3, 5], KIT_EVENTS = ['played_5_mins', 'played_10_mins', 'coins_below_threshold'];
 const TOKEN_RE = /^[A-Za-z0-9]{4,64}$/;
 function adjustCard(gameSelect) {
   const box = el('section', { class: 'card', id: 'adjust' });
@@ -622,7 +693,8 @@ function adjustCard(gameSelect) {
       else { const l = JSON.parse(await rd.text('levels.json')), n = (Array.isArray(l) ? l : l.levels || []).length; events = []; for (let k = 10; k <= n; k += 10) events.push(k); }
     } catch (e) {}
     if (n !== ask) return;
-    const names = events.map(k => 'level_' + k + '_achieved').concat(DAY_EVENTS);
+    const levels = [...new Set(EARLY_LEVELS.concat(events))].sort((a, b) => a - b);
+    const names = ['level_1_started'].concat(levels.map(k => 'level_' + k + '_achieved'), KIT_EVENTS, DAY_EVENTS);
     const appName = 'ADJUST_APP_TOKEN_' + ID, evName = 'ADJUST_EVENTS_' + ID;
     const state = name => have instanceof Map ? (have.has(name) ? chip('good', 'Set ' + when(have.get(name))) : chip('warn', 'Not set')) : chip('', 'Unknown');
     const field = (name, label) => { const i = el('input', { type: 'password', autocomplete: 'off', spellcheck: 'false', 'data-event': name, placeholder: 'token' }); return [i, el('label', {}, label, i)]; };
@@ -658,7 +730,7 @@ function adjustCard(gameSelect) {
       el('div', { class: 'row' }, el('strong', { text: appName }), state(appName)),
       el('div', { class: 'form' }, appLabel), el('div', { class: 'row' }, appBtn),
       el('div', { class: 'row' }, el('strong', { text: evName }), state(evName)),
-      el('p', { class: 'small muted', text: 'Make each event in Adjust (the app > Events), then copy its token here. day_N_login: once per player, on a session N calendar days (Istanbul time) after the first open.' }),
+      el('p', { class: 'small muted', text: 'Make each event in Adjust (the app > Events), then copy its token here. Each one is sent at most once per player (per installation). level_1_started: level 1 starts the first time. level_N_achieved: level N won. played_5_mins / played_10_mins: the game was open and in front that long, all sessions together. coins_below_threshold: the coins drop below the Play On cost the first time. day_N_login: a session N calendar days (Istanbul time) after the first open.' }),
       el('div', { class: 'form' }, ...evFields.map(f => f[1])), el('div', { class: 'row' }, evBtn), msg);
   };
   gameSelect.addEventListener('change', draw); draw();
