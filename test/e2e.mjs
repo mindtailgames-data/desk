@@ -542,11 +542,11 @@ try {
     tutorial: '.dk-panel.tut .dk-btn:has-text("Got it")', 'tutorial-next': '.dk-panel.tut .dk-btn:has-text("Next")', 'tutorial-focus': '#dk-tut:not(.dk-hidden) .bubble',
     'tutorial-booster': '.dk-panel.tut.booster .tut-pic', 'tutorial-booster-use': '#dk-tut:not(.dk-hidden) .bubble:has-text("Tap to use")', 'tutorial-obstacle': '.dk-panel.tut.obstacle .tut-pic img',
     'booster-locked': '.dk-booster.locked', level: '#dk-hud .lvl.normal', 'level-hard': '#dk-hud .lvl.hard', 'level-superhard': '#dk-hud .lvl.superhard',
-    'boosters-empty': '.dk-booster .cnt.plus', paused: '#dk-pops .dk-btn.red', quit: '.dk-panel.fail .msg:has-text("lose one life")', booster: '#dk-pops .booster-art',
+    'boosters-empty': '.dk-booster .cnt.plus', paused: '#dk-pops .dk-btn.red', quit: '.dk-panel.loss .loss-msg:has-text("1 life")', booster: '#dk-pops .booster-art',
     'booster-nocoins': '#dk-pops .note.warn:not(.dk-hidden)', fail: '#dk-pops .amount', 'fail-art': '#dk-pops .fail-art img', 'fail-nocoins': '#dk-pops .note.warn:not(.dk-hidden)',
-    fail2: '.dk-panel.fail .msg:has-text("lose one life")', failed: '.dk-panel .lost', nolives: '.dk-heart', refill: '.dk-heart b:has-text("2")',
+    fail2: '.dk-panel.loss .loss-msg:has-text("1 life")', failed: '.dk-panel.failed .loss-msg', nolives: '.dk-heart', refill: '.dk-heart b:has-text("2")',
     'refill-nocoins': '#dk-pops .note.warn:not(.dk-hidden)', 'milestones-home': '.dk-ms-bar:not(.dk-hidden)', milestones: '.ms-row', 'milestone-reward': '.dk-win.ms-reward',
-    'milestones-gone': '#dk-home:has(.dk-ms-bar.dk-hidden) .dk-node.cur', win: '.dk-win:not(.ms-reward)' };
+    'milestones-gone': '#dk-home:has(.dk-ms-bar.dk-hidden) .dk-node.cur', win: '.dk-win:not(.ms-reward)', 'win-normal': '.panel-win .lvl', 'win-superhard': '.panel-win .dk-panel.fail .tag.superhard' };
   const missing = [], unknown = opts.filter(id => !WANT[id]);
   for (const id of opts) {
     await p.selectOption('#player-screen', id); await p.waitForTimeout(1300);
