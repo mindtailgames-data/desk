@@ -503,6 +503,15 @@ try {
   ok('art: a master with other proportions is refused, with the size to draw', await p.waitForSelector('text=has other proportions than the slot', { timeout: 20000 }).then(() => true, () => false));
   await pick(green.title, save('button-master.png', PNG.button));
   ok('art: a right master is scaled to the slot\'s exact size', await p.waitForSelector('.tray >> text=skin/button-green', { timeout: 20000 }).then(() => true, () => false) && /skin\/button-green\.\w+ .*800 x 320 → 400 x 160/.test(await p.innerText('.tray')));
+  // the library: the new picture is kept as a new version and used; the art team's version stays, one tap brings it back
+  const trayV = await p.innerText('.tray');
+  ok('art library: an upload is kept as a new version and is the one in use', /library\/skin\/button-green\/upload-\d{8}\.\w+/.test(trayV) && trayV.includes('library/selected.json'), trayV.split('\n').filter(l => /button-green|selected/.test(l)).join(' | '));
+  const card = p.locator('.art-item.skin:has(.nm:text-is("' + SK.slots.find(s => s.id === 'button-green').title + '"))');
+  ok('art library: the slot shows both versions, the new one in use', await card.locator('.ver').count() === 2 && /upload-/.test(await card.locator('.ver.on').innerText()), await card.locator('.ver').count() + ' versions');
+  await card.locator('.ver:not(.on)').click(); await p.waitForTimeout(800);
+  const card2 = p.locator('.art-item.skin:has(.nm:text-is("' + SK.slots.find(s => s.id === 'button-green').title + '"))');
+  ok('art library: a tap on the art team\'s version uses it again (the upload stays in the library)', /art-team/.test(await card2.locator('.ver.on').innerText()) && /version art-team/.test(await p.innerText('.tray')) && /library\/skin\/button-green\/upload-/.test(await p.innerText('.tray')));
+  await card2.locator('.ver:not(.on)').click(); await p.waitForTimeout(800);   // (and the upload again: the checks below propose it)
   const cel = SK.slots.find(s => s.kind === 'lottie');
   if (cel) {
     await pick(cel.title, save('celebration.json', Buffer.from(JSON.stringify({ v: '5.7.4', fr: 30, ip: 0, op: 30, w: cel.size[0], h: cel.size[1], layers: [] }))));

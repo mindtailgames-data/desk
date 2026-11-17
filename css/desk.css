@@ -167,3 +167,11 @@ table.texts select { width: auto; min-width: 110px; }
 .text-sample { display: inline-block; min-width: 96px; padding: 6px 10px; border-radius: 8px; background: #2c2560; line-height: 1.15; white-space: nowrap; }
 .text-sample.light { background: #fff4e6; }
 .font-sample { font-size: 20px; min-width: 90px; }
+/* the art library: every version of a slot, the one in use outlined */
+.versions { display: flex; flex-direction: column; gap: 4px; }
+.ver-row { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 2px; }
+.ver { flex: 0 0 auto; display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 4px; height: auto; min-height: 0; line-height: 1.2; border: 2px solid var(--line); border-radius: 8px; background: var(--sunk); color: var(--ink); font-weight: 500; cursor: pointer; max-width: 76px; box-shadow: none; }
+.ver:hover { background: var(--accent-soft); color: var(--ink); }
+.ver img { width: 40px; height: 40px; object-fit: contain; }
+.ver span { max-width: 68px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ver.on { border-color: var(--accent, #2b6cff); cursor: default; }

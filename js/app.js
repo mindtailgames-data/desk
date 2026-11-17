@@ -770,7 +770,7 @@ const again = () => { const y = window.scrollY; fresh(); artView().then(() => wi
 let artPreview = () => {};   // set by the Art page: the starter game with the art pack (and the staged changes)
 async function artView() {
   const view = cur;
-  page(view, 'Art', 'The art every game uses. Replace any file with a master of any size: the website makes the game-ready version, and the change is proposed for approval.',
+  page(view, 'Art', 'The art every game uses. Replace any file with a master of any size: the website makes the game-ready version, and the change is proposed for approval. Every version of a UI skin slot and icon is kept: pick the one every game uses.',
     el('button', { type: 'button', class: 'ghost', text: 'Preview the current art', onclick: () => artPreview(false) }));
   loading(view);
   try {
@@ -830,7 +830,47 @@ async function artView() {
       const starter = await S.gh.reader(S.factory, sha, 'templates/starter');
       return screensOf(kit, await buildGame(overlay(kit), starter, { bots: false }));
     }, { screens: true });
-    const stage = (r, label) => { for (const p of r.remove || []) staged.set(p, { bytes: null }); staged.set(r.path, { bytes: r.bytes, preview: r.preview, note: r.note, label }); };
+    // the library (kit/art/library/<folder>/<name>/<version>.<ext>): every version of a skin slot or icon is kept; the one in
+    // use is also kit/art/<folder>/<name>.<ext> (what the build reads) and is named in library/selected.json
+    const SELP = 'library/selected.json';
+    const selBase = current.includes(SELP) ? JSON.parse(await kit.text('art/' + SELP)) : { selected: {} };
+    const selNow = () => staged.has(SELP) ? JSON.parse(new TextDecoder().decode(staged.get(SELP).bytes)) : selBase;
+    const setSel = (key, v) => { const o = JSON.parse(JSON.stringify(selNow())); if (v == null) delete o.selected[key]; else o.selected[key] = v;   // (null: no picture, the kit's drawing)
+      o.selected = Object.fromEntries(Object.entries(o.selected).sort());
+      staged.set(SELP, { bytes: new TextEncoder().encode(JSON.stringify(o, null, 1) + '\n'), note: 'versions in use' }); };
+    const versionsOf = key => [...new Set(current.filter(p => p.startsWith('library/' + key + '/')).concat([...staged.keys()].filter(p => p.startsWith('library/' + key + '/') && staged.get(p).bytes)))]
+      .map(p => p.slice(('library/' + key + '/').length)).filter(f => !f.includes('/')).sort();
+    const stem = f => f.replace(/\.[^.]+$/, '');
+    const libBytes = async p => staged.has(p) && staged.get(p).bytes ? staged.get(p).bytes : await kit.bytes('art/' + p);
+    const useVersion = async (key, f, label) => {   // every game uses this version: it becomes the file in use
+      const [folder, name] = key.split('/'), ext = f.split('.').pop(), active = folder + '/' + name + '.' + ext;
+      for (const p of current.concat([...staged.keys()])) if (p.startsWith(folder + '/' + name + '.') && p !== active) staged.set(p, { bytes: null, label });
+      const bytes = await libBytes('library/' + key + '/' + f);
+      staged.set(active, { bytes, preview: URL.createObjectURL(new Blob([bytes], { type: ext === 'svg' ? 'image/svg+xml' : 'image/' + ext })), note: 'version ' + stem(f), label });
+      setSel(key, stem(f)); again();
+    };
+    // the versions of a slot: a small picture each, the one in use marked; a tap uses another
+    const versionStrip = async (key, label) => {
+      const vs = versionsOf(key), on = selNow().selected[key];
+      if (!vs.length) return null;
+      const items = await Promise.all(vs.map(async f => el('button', { type: 'button', class: 'ver' + (stem(f) === on ? ' on' : ''), title: stem(f) === on ? stem(f) + ' (in use)' : 'Use ' + stem(f) + ' in every game',
+        onclick: () => { if (stem(f) !== on) useVersion(key, f, label); } }, f.endsWith('.json') ? el('span', { class: 'small', text: 'json' }) : el('img', { alt: stem(f), src: URL.createObjectURL(new Blob([await libBytes('library/' + key + '/' + f)], { type: f.endsWith('.svg') ? 'image/svg+xml' : 'image/' + f.split('.').pop() })) }), el('span', { class: 'small', text: stem(f) }))));
+      return el('div', { class: 'versions' }, el('div', { class: 'small muted', text: vs.length + ' version' + (vs.length === 1 ? '' : 's') + ' · tap one to use it' }), el('div', { class: 'ver-row' }, ...items));
+    };
+    const stage = (r, label) => {
+      for (const p of r.remove || []) staged.set(p, { bytes: null });
+      staged.set(r.path, { bytes: r.bytes, preview: r.preview, note: r.note, label });
+      // a new skin picture or icon is also kept in the library as a new version (the old ones stay there to go back to)
+      const m = /^(skin|icons)\/([^/]+)\.(\w+)$/.exec(r.path);
+      if (m && r.bytes) {
+        const key = m[1] + '/' + m[2], have = versionsOf(key).map(stem), d = new Date();
+        let v = 'upload-' + d.toISOString().slice(0, 10).replace(/-/g, ''), k = 1;
+        while (have.includes(k === 1 ? v : v + '-' + k)) k++;
+        if (k > 1) v += '-' + k;
+        staged.set('library/' + key + '/' + v + '.' + m[3], { bytes: r.bytes, note: 'kept as a version' });
+        setSel(key, v);
+      }
+    };
     const picker = (slot, accept, label, after) => {
       const inp = el('input', { type: 'file', accept, hidden: true }), err = el('div', {});
       inp.addEventListener('change', async () => {
@@ -862,6 +902,7 @@ async function artView() {
       return el('div', { class: 'art-item' + (changed ? ' staged' : '') },
         el('div', { class: 'swatch', style: 'background:' + theme.bg2 }, p ? el('img', { alt: n, src: await urlOf(p) }) : el('span', { class: 'small muted', text: 'missing' })),
         el('div', { class: 'nm', text: n }), el('div', { class: 'small muted', text: p ? p.split('.').pop().toUpperCase() : '' }),
+        await versionStrip('icons/' + n, 'icon ' + n),
         ...picker({ kind: 'icon', name: n }, '.svg,image/*', 'icon ' + n));
     });
     view.append(el('section', { class: 'card' }, el('h2', { text: 'Icons' }), el('p', { class: 'small muted', text: 'SVG stays sharp at any size (best). A picture of any size becomes a 256 x 256 transparent picture.' }), el('div', { class: 'art-grid' }, ...icons)));
@@ -962,10 +1003,11 @@ async function artView() {
         const url = URL.createObjectURL(new Blob([await previews.bytes('previews/' + base + '.png')], { type: 'image/png' }));
         shown = el('div', { class: 'skin-thumb drawn', title: 'The kit\'s current drawing (no picture yet)' }, el('img', { alt: label + ' (drawn by the kit)', src: url }));
       } else shown = el('span', { class: 'small muted', text: sl.kind === 'cover' && /dim/.test(sl.selector) ? 'The kit\'s dark layer' : sl.id === 'tutorial-art' ? 'Not shown' : 'Drawn by the kit' });
-      const reset = f ? el('button', { type: 'button', class: 'link small', text: 'Back to the kit\'s look', onclick: () => { for (const k of current.filter(k => k.startsWith('skin/' + base + '.'))) staged.set(k, { bytes: null, label }); for (const k of [...staged.keys()]) if (k.startsWith('skin/' + base + '.') && staged.get(k).bytes) staged.delete(k); again(); } }) : null;
+      const reset = f ? el('button', { type: 'button', class: 'link small', text: 'Back to the kit\'s look', onclick: () => { for (const k of current.filter(k => k.startsWith('skin/' + base + '.'))) staged.set(k, { bytes: null, label }); for (const k of [...staged.keys()]) if (k.startsWith('skin/' + base + '.') && staged.get(k).bytes) staged.delete(k); setSel('skin/' + base, null); again(); } }) : null;
       return el('div', { class: 'art-item skin' + (changed ? ' staged' : '') }, el('div', { class: 'swatch skin-swatch' }, shown),
         el('div', { class: 'nm', text: label }), el('div', { class: 'small muted', text: sl.size.join(' x ') + ' · ' + kindText(sl) }),
         f ? null : el('div', { class: 'small muted', text: sl.id === 'tutorial-art' ? 'No picture: the cards show none' : sl.kind === 'lottie' || sl.kind === 'pieces' ? 'No picture: the kit\'s default' : 'No picture yet: the kit\'s drawing (above)' }),
+        await versionStrip('skin/' + base, label),
         ...picker({ kind: 'skin', slot: sl, file: base }, sl.kind === 'lottie' ? '.json,application/json' : 'image/*', label), reset);
     };
     const groups = [...new Set(SK.slots.map(sl => sl.group))];
