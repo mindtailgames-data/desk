@@ -537,7 +537,7 @@ try {
   const scrSrc = fileAt(FAC, 'main', 'kit/preview/screens.js').toString(), scrWant = (scrSrc.match(/^  \['/gm) || []).length;
   const opts = await p.$$eval('#player-screen option', o => o.map(x => x.value).filter(Boolean));
   ok('preview: the Show menu has the factory\'s screen list', opts.length === scrWant, opts.length + ' of ' + scrWant);
-  const WANT = { splash: '#dk-splash', home: '#dk-home .dk-node.cur', 'home-hard': '.dk-node.hard', 'home-superhard': '.dk-node.superhard',
+  const WANT = { splash: '#dk-splash', home: '#dk-home .play .lvl-btn', 'home-hard': '#dk-home .lvl-btn.alt', 'home-superhard': '#dk-home .lvl-btn.red', 'home-lastday': '.dk-ms-bar .time:has-text("h")', 'home-minutes': '.dk-ms-bar .time:has-text("0h")', 'home-shop': '#dk-home.page-soon .dk-tab.on[data-tab=shop]', 'home-leaderboard': '#dk-home.page-soon .dk-tab.on[data-tab=leaderboard]',
     'home-lives': '[data-lives] .dk-plus:not(.dk-hidden)', 'home-done': '#dk-home .done', toast: '#dk-toast:not(.dk-hidden)', settings: '.dk-set',
     tutorial: '.dk-panel.tut .dk-btn:has-text("Got it")', 'tutorial-next': '.dk-panel.tut .dk-btn:has-text("Next")', 'tutorial-focus': '#dk-tut:not(.dk-hidden) .bubble',
     'tutorial-booster': '.dk-panel.tut.booster .tut-pic', 'tutorial-booster-use': '#dk-tut:not(.dk-hidden) .bubble:has-text("Tap to use")', 'tutorial-obstacle': '.dk-panel.tut.obstacle .tut-pic img',
@@ -546,7 +546,7 @@ try {
     'booster-nocoins': '#dk-pops .note.warn:not(.dk-hidden)', fail: '#dk-pops .amount', 'fail-art': '#dk-pops .fail-art img', 'fail-nocoins': '#dk-pops .note.warn:not(.dk-hidden)',
     fail2: '.dk-panel.loss .loss-msg:has-text("1 life")', failed: '.dk-panel.failed .loss-msg', nolives: '.dk-heart', refill: '.dk-heart b:has-text("2")',
     'refill-nocoins': '#dk-pops .note.warn:not(.dk-hidden)', 'milestones-home': '.dk-ms-bar:not(.dk-hidden)', milestones: '.ms-row', 'milestone-reward': '.dk-win.ms-reward',
-    'milestones-gone': '#dk-home:has(.dk-ms-bar.dk-hidden) .dk-node.cur', win: '.dk-win:not(.ms-reward)', 'win-normal': '.panel-win .lvl', 'win-superhard': '.panel-win .dk-panel.fail .tag.superhard' };
+    'milestones-gone': '#dk-home:has(.dk-ms-bar.dk-hidden) .lvl-btn', win: '.dk-win:not(.ms-reward)', 'win-normal': '.panel-win .lvl', 'win-superhard': '.panel-win .dk-panel.fail .tag.superhard' };
   const missing = [], unknown = opts.filter(id => !WANT[id]);
   for (const id of opts) {
     await p.selectOption('#player-screen', id); await p.waitForTimeout(1300);
