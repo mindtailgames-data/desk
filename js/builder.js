@@ -36,9 +36,9 @@ export function checkPublic(cfg, path = 'cfg') {
 }
 
 // kit: a reader rooted at the factory's kit/ folder
-async function first(kit, folder, name) {
+async function first(kit, folder, name, only) {   // (only: one extension, like '.woff2')
   const files = (await kit.list('art/' + folder)).sort();
-  const f = files.find(x => stem(x) === name);
+  const f = files.find(x => stem(x) === name && (!only || x.toLowerCase().endsWith(only)));
   return f ? 'art/' + folder + '/' + f : null;
 }
 export async function loadArt(kit) {
@@ -143,7 +143,7 @@ export async function buildPage(kit, cfg, { levels = null, gameCss = '', gameHtm
   const eco = Object.assign({}, DEFAULT_ECONOMY, cfg.economy || {}); cfg.economy = eco;
   const art = await loadArt(kit);
   const theme = Object.assign({}, art.theme, cfg.theme || {}); delete art.theme; cfg.theme = theme;
-  const font = (await first(kit, 'fonts', JSON.parse(await kit.text('art/manifest.json')).fonts.file)) || (await first(kit, 'fonts', 'font'));   // the kit's font: the manifest names it
+  const fontName = JSON.parse(await kit.text('art/manifest.json')).fonts.file, font = (await first(kit, 'fonts', fontName, '.woff2')) || (await first(kit, 'fonts', 'font'));   // the kit's font: the manifest names it (its .woff2, never the license .txt next to it)
   const splash = (await first(kit, 'splash', 'duste-splash')) || (await first(kit, 'splash', 'splash'));
   const fontB64 = base64(await kit.bytes(font)), splashUri = dataUri(splash, await kit.bytes(splash)), splashBg = await splashBackground(kit);
   const css = pyText(await kit.text('core/kit.css')).replaceAll('/*FONT*/', () => fontB64)
