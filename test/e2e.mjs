@@ -374,6 +374,12 @@ try {
   await shot(p, 'submit');
   await p.click('button:has-text("Play it here first")');
   ok('submit: "Play it here first" runs the folder with the kit from main', await frame(p).locator('#dk-home').waitFor({ timeout: 60000 }).then(() => true, () => false));
+  await p.selectOption('#player-flow', '5');   // the player's Non-stop: a fresh start straight into level 1, the next levels without a win screen
+  let flowOk = null;
+  for (let k = 0; k < 40 && !(flowOk && flowOk[0] === 'game'); k++) { await p.waitForTimeout(500); const f = p.frames().find(x => x.parentFrame() === p.mainFrame());
+    flowOk = f ? await f.evaluate(() => window.DK && DK.flow && DK.bootedAt ? [DK.screen.cur, DK.flow.upTo()] : null).catch(() => null) : null; }
+  ok('player: Non-stop to level 5 starts straight in level 1 with the flow on', !!flowOk && flowOk[0] === 'game' && flowOk[1] === 5, JSON.stringify(flowOk));
+  await p.selectOption('#player-flow', '');
   await p.click('#player-close');
   const n0 = calls.length;
   await p.click('button:has-text("Resubmit #9")'); await until(p, 'Resubmitted and reopened');

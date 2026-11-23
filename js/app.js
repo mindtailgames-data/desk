@@ -195,7 +195,9 @@ window.addEventListener('message', e => {
 function showGame() {
   const lvl = Math.max(1, parseInt($('#player-level').value, 10) || 1);
   const lang = playing.langs.length > 1 ? $('#player-lang').value : null;
-  let page = playing.page.replace('<head>\n', () => '<head>\n' + storageShim(playing.id, lvl, lang) + fpsMeter() + playing.files);
+  const flow = parseInt($('#player-flow').value, 10);   // (non-stop to try: the kit reads DK_FLOW_TRY before its own settings)
+  const flowTry = Number.isInteger(flow) && flow >= 2 && flow <= 15 ? '<script>window.DK_FLOW_TRY=' + flow + ';<\/script>\n' : '';
+  let page = playing.page.replace('<head>\n', () => '<head>\n' + storageShim(playing.id, lvl, lang) + flowTry + fpsMeter() + playing.files);
   $('#player-fps').textContent = '… fps'; $('#player-fps').className = 'chip';
   if (playing.screens) page = page.replace(/<\/body>\n<\/html>\n$/, () => '<script>\n' + playing.screens + '\n</script>\n</body>\n</html>\n');
   $('#player-frame').srcdoc = page;
@@ -220,6 +222,8 @@ async function play(title, makePage, opts) {
 }
 $('#player-restart').addEventListener('click', () => { if (playing) showGame(); });
 $('#player-lang').addEventListener('change', () => { if (playing) showGame(); });
+$('#player-flow').append(...Array.from({ length: 14 }, (_, k) => el('option', { value: String(k + 2), text: 'to level ' + (k + 2) })));
+$('#player-flow').addEventListener('change', () => { if (playing) { $('#player-level').value = '1'; showGame(); } });   // (non-stop starts at level 1: a fresh start)
 $('#player-close').addEventListener('click', () => { $('#player').hidden = true; $('#player-frame').srcdoc = ''; playing = null; });
 document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('#player').hidden) $('#player-close').click(); });
 async function gamePage(gameSha, id, kitOverlay, settings) {
