@@ -711,6 +711,7 @@ function adjustCard(gameSelect) {
       if (c.analytics && Array.isArray(c.analytics.levelAchieved)) events = c.analytics.levelAchieved;
       else { const l = JSON.parse(await rd.text('levels.json')), n = (Array.isArray(l) ? l : l.levels || []).length; events = []; for (let k = 10; k <= n; k += 10) events.push(k); }
     } catch (e) {}
+    const lastResult = await lastCheck(id);
     if (n !== ask) return;
     const levels = [...new Set(EARLY_LEVELS.concat(events))].sort((a, b) => a - b);
     const names = ['level_1_started'].concat(levels.map(k => 'level_' + k + '_achieved'), KIT_EVENTS, DAY_EVENTS);
@@ -743,17 +744,63 @@ function adjustCard(gameSelect) {
       if (!lines.length) { msg.replaceChildren(note('bad', 'Enter the event tokens first.')); return; }
       confirmBox(msg, 'Replace ' + evName + ' with ' + lines.length + ' event token' + (lines.length > 1 ? 's' : '') + '?' + (empty.length ? ' These stay empty and will not be sent: ' + empty.join(', ') + '.' : ''), 'Save', () => save(evName, lines.join('\n'), evBtn, () => evFields.forEach(([i]) => { i.value = ''; })));
     });
+    // which events have a token: the last check, and a button to check again (names only, on GitHub: a minute)
+    const checkOut = el('div', {}, checkResult(lastResult)), checkBtn = el('button', { type: 'button', class: 'ghost', text: 'Check the tokens' });
+    checkBtn.addEventListener('click', () => checkTokens(id, checkOut, checkBtn));
+    if (checking.has(id)) { const w = checking.get(id); w.out = checkOut; w.btn = checkBtn; checkBtn.disabled = true; checkOut.replaceChildren(CHECKING()); }
     box.replaceChildren(el('h2', { text: 'Adjust tokens' }),
       el('p', { class: 'small muted', text: 'For ' + id + ': written as GitHub secrets of the release repository, encrypted in this browser. GitHub never shows them again, so the fields are always empty; saving replaces the old value. Event tokens are saved together: enter all of them each time.' }),
       ...(have instanceof Error ? [note('warn', 'Cannot see which secrets are set (' + have.message + ') Your token needs "Secrets: Read and write" on the release repository.')] : []),
       el('div', { class: 'row' }, el('strong', { text: appName }), state(appName)),
       el('div', { class: 'form' }, appLabel), el('div', { class: 'row' }, appBtn),
       el('div', { class: 'row' }, el('strong', { text: evName }), state(evName)),
+      el('div', { class: 'stack' }, checkOut, el('div', { class: 'row' }, checkBtn)),
       el('p', { class: 'small muted', text: 'Make each event in Adjust (the app > Events), then copy its token here. Each one is sent at most once per player (per installation). level_1_started: level 1 starts the first time. level_N_achieved: level N won. played_5_mins / played_10_mins: the game was open and in front that long, all sessions together. coins_below_threshold: the coins drop below the Play On cost the first time. day_N_login: a session N calendar days (Istanbul time) after the first open.' }),
       el('div', { class: 'form' }, ...evFields.map(f => f[1])), el('div', { class: 'row' }, evBtn), msg);
   };
   gameSelect.addEventListener('change', draw); draw();
   return box;
+}
+// ---------- Check Adjust tokens: which events have a token (names only), without a build ----------
+// GitHub never shows a secret again, so a small workflow of the release repository (.github/workflows/adjust-check.yml)
+// looks inside it and writes <game>.json (event names, each with or without a token; never a token) to its
+// "adjust-checks" branch, which is read here
+async function lastCheck(id) {
+  try { const f = await S.gh.get(R() + '/contents/' + id + '.json?ref=adjust-checks'); return JSON.parse(new TextDecoder().decode(Uint8Array.from(atob(f.content.replace(/\s/g, '')), c => c.charCodeAt(0)))); }
+  catch (e) { return null; }
+}
+function checkResult(r) {
+  if (!r) return el('p', { class: 'small muted', text: 'Not checked yet.' });
+  const n = r.events.length, ok = r.events.filter(e => e.token).length;
+  const head = !r.eventsSecret ? chip('bad', 'No event tokens saved') : ok === n ? chip('good', 'All ' + n + ' events have a token') : chip('warn', ok + ' of ' + n + ' events have a token');
+  return el('div', { class: 'stack' },
+    el('div', { class: 'row' }, head, r.appToken ? chip('good', 'App token set') : chip('bad', 'No app token'),
+      el('a', { class: 'small muted', href: r.run, target: '_blank', rel: 'noopener noreferrer', text: 'checked ' + when(r.at) })),
+    ...(r.missing.length && r.eventsSecret ? [el('p', { class: 'small', text: 'No token: ' + r.missing.join(', ') + '. Enter all ' + n + ' tokens below and save once (a save replaces the whole list).' })] : []),
+    ...(r.extra.length ? [el('p', { class: 'small muted', text: 'Saved but never sent by this game (a typo, or another game\'s list?): ' + r.extra.join(', ') })] : []));
+}
+// a check under way, per game: the card may be drawn again meanwhile (e.g. after a save), so the result goes to the
+// place it shows now (checking.get(id).out), and a card drawn meanwhile shows "Checking…"
+const checking = new Map();
+const CHECKING = () => note('', 'Checking on GitHub… (usually under a minute)');
+function checkTokens(id, out, btn) {
+  const req = Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8), started = Date.now(), w = { out, btn };
+  checking.set(id, w); btn.disabled = true; out.replaceChildren(CHECKING());
+  const done = node => { if (checking.get(id) === w) checking.delete(id); w.btn.disabled = false; w.out.replaceChildren(node); };
+  S.gh.post(R() + '/actions/workflows/adjust-check.yml/dispatches', { ref: 'main', inputs: { game: id, request: req } }).then(() => {
+    const poll = async () => {
+      if (checking.get(id) !== w) return;   // (a newer check of the same game took over)
+      const r = await lastCheck(id); if (r && r.request === req) return done(checkResult(r));
+      try {   // a failed run: say so at once (with its link) rather than wait
+        const runs = await S.gh.get(R() + '/actions/workflows/adjust-check.yml/runs?per_page=5');
+        const bad = (runs.workflow_runs || []).find(x => new Date(x.created_at) >= started - 60000 && x.status === 'completed' && x.conclusion !== 'success');
+        if (bad) return done(el('div', {}, note('bad', 'The check failed on GitHub. '), el('a', { href: bad.html_url, target: '_blank', rel: 'noopener noreferrer', text: 'See what went wrong' })));
+      } catch (e) {}
+      if (Date.now() - started > 5 * 60000) return done(note('bad', 'No result after 5 minutes. Look at Actions > "Check Adjust tokens" on GitHub.'));
+      setTimeout(poll, 5000);
+    };
+    setTimeout(poll, 8000);
+  }).catch(e => done(note('bad', e.message)));
 }
 // what a new build's form starts with: defaults.json in the release repository (editable there)
 async function buildDefaults() {

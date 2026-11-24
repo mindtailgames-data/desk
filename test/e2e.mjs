@@ -103,6 +103,7 @@ const comments = {};   // number -> [comment]
 const checks = {};     // sha -> { status, conclusion }
 const runs = [];       // release builds
 const secrets = new Map();   // name -> { value (opened), updated_at }
+const adjustDispatches = [], adjustResults = {};   // (Check Adjust tokens: the starts, and each game's result)
 const KEYS = nacl.box.keyPair();
 const calls = [];      // every write Desk makes
 const outside = [];    // anything Desk tried to reach besides GitHub's API and its own files
@@ -198,6 +199,22 @@ function api(who, method, url, body) {
   if (rest === '/actions/workflows/release.yml/dispatches' && method === 'POST') {
     runs.push({ status: 'queued', conclusion: null, display_title: 'Release ' + body.inputs.game, run_number: runs.length + 1, created_at: new Date().toISOString(), updated_at: new Date().toISOString(), html_url: 'https://github.com/' + REL_NAME + '/actions/runs/' + (runs.length + 1) });
     return [204, null];
+  }
+  // Check Adjust tokens (adjust-check.yml): the stand-in "runs" it 2 s after the start, from the names in the saved
+  // secret (never a token), and puts <game>.json on the adjust-checks branch
+  if (rest.startsWith('/actions/workflows/adjust-check.yml/runs')) return [200, { workflow_runs: [] }];
+  if (rest === '/actions/workflows/adjust-check.yml/dispatches' && method === 'POST') {
+    adjustDispatches.push(body);
+    setTimeout(() => {
+      const g = body.inputs.game, sec = secrets.get('ADJUST_EVENTS_' + g.toUpperCase()), have = new Set(sec ? sec.value.split('\n').map(l => l.split('=')[0]) : []);
+      const want = ['level_1_started', 'level_1_achieved', 'level_10_achieved', 'day_1_login', 'day_2_login'];
+      adjustResults[g] = { game: g, request: body.inputs.request, at: new Date().toISOString(), run: 'https://github.com/' + REL_NAME + '/actions/runs/9', appToken: secrets.has('ADJUST_APP_TOKEN_' + g.toUpperCase()), eventsSecret: !!sec,
+        events: want.map(name => ({ name, token: have.has(name) })), missing: want.filter(n => !have.has(n)), extra: [...have].filter(n => !want.includes(n)) };
+    }, 2000);
+    return [204, null];
+  }
+  if ((x = /^\/contents\/([a-z0-9]+)\.json$/.exec(rest)) && q.get('ref') === 'adjust-checks') {
+    const r = adjustResults[x[1]]; return r ? [200, { content: Buffer.from(JSON.stringify(r)).toString('base64') }] : [404, { message: 'Not Found' }];
   }
   if (rest.startsWith('/actions/secrets/public-key')) return [200, { key_id: 'key-1', key: Buffer.from(KEYS.publicKey).toString('base64') }];
   if (rest.startsWith('/actions/secrets') && method === 'GET') return [200, { total_count: secrets.size, secrets: [...secrets].map(([name, s]) => ({ name, updated_at: s.updated_at })) }];
@@ -484,6 +501,15 @@ try {
   await p.click('#adjust button.danger:has-text("Save")'); await p.waitForSelector('#adjust >> text=ADJUST_EVENTS_SORTDEMO saved', { timeout: 10000 }).catch(() => {});
   const ev = (secrets.get('ADJUST_EVENTS_SORTDEMO') || {}).value || '';
   ok('adjust: the event tokens are saved together, one event=token per line', ev.split('\n').sort().join(',') === 'day_1_login=aaa111,level_10_achieved=bbb222', ev);
+  // Check the tokens: which events have one (names only), from the check on GitHub
+  await p.waitForSelector('#adjust button:has-text("Check the tokens")', { timeout: 10000 });
+  ok('adjust check: a game never checked says so', (await p.innerText('#adjust')).includes('Not checked yet'));
+  await p.click('#adjust button:has-text("Check the tokens")');
+  await p.waitForSelector('#adjust >> text=2 of 5 events have a token', { timeout: 30000 }).catch(() => {});
+  const chk = await p.innerText('#adjust'), ad = adjustDispatches[0];
+  ok('adjust check: the check starts for the game, with a request id', !!ad && ad.inputs.game === 'sortdemo' && /^[a-z0-9-]+$/.test(ad.inputs.request), JSON.stringify(ad));
+  ok('adjust check: the result shows how many have a token and names the missing ones', chk.includes('2 of 5 events have a token') && chk.includes('No token: level_1_started, level_1_achieved, day_2_login') && chk.includes('App token set'), chk.slice(0, 400));
+  ok('adjust check: no token is shown', !chk.includes('aaa111') && !chk.includes('bbb222'));
   await shot(p, 'builds');
   await p.goto(ORIGIN + '/#builds'); await until(p, 'New build'); await p.selectOption('#b-game', 'sortdemo'); await p.waitForSelector('#b-coins', { timeout: 15000 });
   await p.waitForFunction(() => document.querySelector('#b-coins') && document.querySelector('#b-coins').value === '1000', null, { timeout: 10000 }).catch(() => {});
