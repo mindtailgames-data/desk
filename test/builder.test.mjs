@@ -11,6 +11,7 @@ const reader = root => ({
 // the starter and every game in the factory (each built by Python first)
 const G = path.join(F, 'games');
 const gamesDirs = [path.join(F, 'templates', 'starter')].concat(fs.existsSync(G) ? fs.readdirSync(G).map(d => path.join(G, d)).filter(d => fs.existsSync(path.join(d, 'game.json'))) : []);
+for (const d of process.argv.slice(3)) if (fs.existsSync(path.join(d, 'game.json'))) gamesDirs.push(path.resolve(d));   // (more game folders to compare: node test/builder.test.mjs <factory> [game folder...])
 let fails = 0;
 // the build settings (Desk's Builds page): every one set, and a few only
 const FULL = { flow: 10, startCoins: 1234, playOnCost: 250, refillCost: 400, rewards: { normal: 30, hard: 60, superhard: 120 }, boosterStart: 2, boosterPrice: 450,

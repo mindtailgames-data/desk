@@ -291,7 +291,10 @@ export async function buildGame(kit, game, { links = null, bots = true, settings
   const lv = JSON.parse(await game.text('levels.json'));
   const submitted = Array.isArray(lv) ? lv : lv.levels;
   const gameJs = pyText(await game.text('game.js'));
-  const gameCss = files.includes('game.css') ? pyText(await game.text('game.css')) : '';
+  let gameCss = files.includes('game.css') ? pyText(await game.text('game.css')) : '';
+  // the game's own home screen background (optional: home-bg.webp or home-bg.png in its folder), over the art team's
+  const homeBg = ['home-bg.webp', 'home-bg.png'].find(f => files.includes(f));
+  if (homeBg) gameCss = (gameCss ? gameCss + '\n' : '') + '#dk-home{background:url(' + dataUri(homeBg, await game.bytes(homeBg)) + ') center/cover no-repeat;}';
   const botJs = bots && files.includes('bot.js') ? pyText(await game.text('bot.js')) : null;
   cfg.links = links || { support: '', terms: '', privacy: '' };
   if (!('analytics' in cfg)) { const a = []; for (let n = 10; n <= submitted.length; n += 10) a.push(n); cfg.analytics = { levelAchieved: a }; }
