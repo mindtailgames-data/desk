@@ -167,6 +167,13 @@ function api(who, method, url, body) {
       return [200, prJson(pr)];
     }
     if (sub.startsWith('/files')) return [200, prFiles(pr)];
+    if (sub === '/update-branch' && method === 'PUT') {   // (main merged into the submission's branch; 422 when it already has main)
+      const head = refOf(dir, pr.ref), main = refOf(dir, 'main');
+      if (body.expected_head_sha && body.expected_head_sha !== head) return [422, { message: 'expected head sha didn\'t match current head ref.' }];
+      try { gitS(dir, 'merge-base', '--is-ancestor', main, head); return [422, { message: 'There are no new commits on the base branch.' }]; } catch (e) {}
+      const tree = gitS(dir, 'merge-tree', '--write-tree', main, head).split('\n')[0];
+      setRef(dir, pr.ref, commitTree(dir, tree, [head, main], "Merge branch 'main' into " + pr.ref)); return [202, { message: 'Updating pull request branch.' }];
+    }
     if (sub === '/merge' && method === 'PUT') {
       const head = refOf(dir, pr.ref);
       if (pr.state !== 'open') return [405, { message: 'Pull Request is not mergeable' }];
@@ -397,6 +404,12 @@ try {
   const b9b = refOf(FAC, 'submit/mygame');
   ok('update: one new commit on the same branch, after the last one', b9b !== b9 && gitS(FAC, 'rev-parse', b9b + '^') === b9);
   ok('update: files gone from the folder are removed from the submission', !hadTools || gitS(FAC, 'ls-tree', '-r', '--name-only', b9b, 'games/mygame/tools') === '');
+  // the same folder again: nothing to commit (GitHub refuses an empty tree): the submission is brought up to date with main
+  await p.goto(ORIGIN + '/#dashboard'); await p.goto(ORIGIN + '/#submit'); await p.waitForSelector('#folder', { state: 'attached' });
+  await p.setInputFiles('#folder', mine); await until(p, 'This updates the open submission #9');
+  await p.click('button:has-text("Update submission #9")'); await until(p, 'Nothing changed in the folder');
+  const sameText = await viewText(p), b9c = refOf(FAC, 'submit/mygame');
+  ok('update: the same folder again is not an error (no empty commit), the submission is brought up to date with main', !/Invalid tree/i.test(sameText) && /brought up to date|already up to date/.test(sameText) && (b9c === b9b || gitS(FAC, 'rev-parse', b9c + '^1') === b9b), sameText.match(/Nothing changed[^.]*\./) ? sameText.match(/Nothing changed[^.]*\./)[0] : '');
 
   // =====================================================================
   // a teammate: no builds, no approving, no taking someone else's id, a new game

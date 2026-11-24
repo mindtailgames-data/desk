@@ -89,6 +89,7 @@ export function client(token) {
       entries.push({ path: f.path, mode: '100644', type: 'blob', sha: b.sha });
     }
     for (const p of remove) entries.push({ path: p, mode: '100644', type: 'blob', sha: null });
+    if (!entries.length && exists) return { sha: parent, created: false, unchanged: true };   // (nothing to change: GitHub refuses an empty tree, "Invalid tree info")
     const t = await req('POST', '/repos/' + repo + '/git/trees', { base_tree: parentCommit.tree.sha, tree: entries });
     const c = await req('POST', '/repos/' + repo + '/git/commits', { message, tree: t.sha, parents: [parent] });
     if (exists) await req('PATCH', '/repos/' + repo + '/git/refs/heads/' + encodeRef(branch), { sha: c.sha, force: false });

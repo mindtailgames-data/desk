@@ -496,6 +496,12 @@ async function reviewSubmission(files, out) {
       const remove = current.filter(p => !keep.has(p) && !SKIP.test(p)).map(p => dir + p);
       const c = await S.gh.commitFiles(S.factory, branch, { base: 'main', message: (mine ? 'Update ' : 'Submit ') + cfg.title + ' (' + id + ')', write, remove });
       let pr = mine;
+      if (c.unchanged && mine) {   // the same folder again: bring the submission up to date with the factory's main, so its check runs again with today's checker and kit
+        let msg;
+        try { await S.gh.put(F() + '/pulls/' + mine.number + '/update-branch', { expected_head_sha: c.sha }); msg = 'Nothing changed in the folder: submission #' + mine.number + ' is brought up to date with the factory, and its check runs again in a few minutes.'; }
+        catch (e) { if (e.status !== 422) throw e; msg = 'Nothing changed in the folder, and submission #' + mine.number + ' is already up to date with the factory: there is nothing to update.'; }
+        status.replaceChildren(note('good', el('span', { text: msg }))); go.disabled = false; return;
+      }
       if (!pr && declined) {
         try { pr = await S.gh.patch(F() + '/pulls/' + declined.number, { state: 'open' }); await S.gh.post(F() + '/issues/' + declined.number + '/comments', { body: 'Resubmitted from Desk by @' + S.user.login + ' (' + c.sha.slice(0, 7) + ').' }); }
         catch (e) { pr = null; }   // (it cannot be reopened, e.g. its branch was deleted: a new submission is opened instead)
