@@ -127,14 +127,15 @@ async function filmIt(inp, run) {
   run.recording = rec;
   const src = path.join(WORK, 'film-' + inp.request); fs.mkdirSync(src);
   execSync('git -C ' + JSON.stringify(FAC) + ' archive ' + inp.sha + ' | tar -x -C ' + JSON.stringify(src));
-  if (rec.finger && rec.finger.kind === 'hand') { rec.finger.file = path.join(src, 'marketing/hands', rec.finger.hand + '.png'); rec.finger.tip = JSON.parse(fs.readFileSync(path.join(src, 'marketing/hands', rec.finger.hand + '.json'))).tip; }
+  if (rec.finger && rec.finger.kind === 'hand') { rec.finger.file = path.join(src, 'marketing/hands', rec.finger.hand + '.png'); const hj = JSON.parse(fs.readFileSync(path.join(src, 'marketing/hands', rec.finger.hand + '.json'))); rec.finger.tip = hj.tip; if ('bend' in hj) rec.finger.bend = hj.bend; }
   fs.writeFileSync(path.join(src, 'recording.json'), JSON.stringify(rec));
   execFileSync(process.env.PYTHON || 'python3', [path.join(src, 'kit/build/build_game.py'), path.join(src, 'games', rec.game)], { stdio: 'pipe' });
   const out = path.join(src, 'out');
   let ok = true, error = '';
   const { execFile } = await import('node:child_process');   // (in the background: the stand-in keeps answering Desk while it films)
-  await new Promise(done => execFile(process.execPath, [path.join(src, 'marketing/recorder/render.js'), path.join(src, 'recording.json'), path.join(src, 'games', rec.game, 'dist/app'), out],
-    { maxBuffer: 1 << 26, env: { ...process.env, NODE_PATH: execSync('npm root -g').toString().trim() } }, (e, so, se) => { if (e) { ok = false; error = String(se || e.message).trim().split('\n').pop(); } run.log = String(so); done(); }));
+  // (called exactly as the workflow calls it: from the factory's parent folder, with relative paths)
+  await new Promise(done => execFile(process.execPath, ['marketing/recorder/render.js', 'recording.json', 'games/' + rec.game + '/dist/app', 'out'],
+    { cwd: src, maxBuffer: 1 << 26, env: { ...process.env, NODE_PATH: execSync('npm root -g').toString().trim() } }, (e, so, se) => { if (e) { ok = false; error = String(se || e.message).trim().split('\n').pop(); } run.log = String(so); done(); }));
   const info = Object.assign(ok ? JSON.parse(fs.readFileSync(path.join(out, 'video.json'))) : { game: rec.game }, { ok, request: inp.request, factory: inp.sha, run: 900 + recordRuns.indexOf(run), date: new Date().toISOString().slice(0, 16).replace('T', ' ') + ' UTC', by: 'owner-person' }, ok ? {} : { error });
   run.info = info;
   const files = { ['rec-' + inp.request + '/video.json']: Buffer.from(JSON.stringify(info)) };
@@ -673,7 +674,7 @@ try {
   const rf = p.frameLocator('#rec-frame');
   ok('record: the game is played at the phone\'s own size (360 x 780 for 1080 x 2340)', await p.$eval('#rec-frame', f => f.style.width === '360px' && f.style.height === '780px'));
   await rf.locator('#dk-home .lvl-btn').first().waitFor({ timeout: 60000 });
-  ok('record: the chosen touches are drawn in the game', await rf.locator(hasHand ? 'body > div > img[src^="data:image/png"]' : 'body > div > div[style*="border-radius: 50%"]').count() === 1);
+  ok('record: the chosen touches are drawn in the game', await rf.locator(hasHand ? 'body > div > div > img[src^="data:image/png"]' : 'body > div > div[style*="border-radius: 50%"]').count() === (hasHand ? 2 : 1));   // (a hand: its picture in two parts, cut at the finger joint)
   await p.click('#rec-start'); await p.waitForSelector('#rec-stop', { timeout: 10000 });
   await p.waitForTimeout(600);
   await rf.locator('#dk-home .lvl-btn').first().click();
@@ -683,6 +684,8 @@ try {
   ok('record: says how long the filmed part is', /Filmed \d+\.\d s/.test(await p.innerText('#rec-filmed')), await p.innerText('#rec-filmed'));
   await shot(p, 'record');
   await p.click('#rec-make'); await until(p, 'Sent.', 20000);
+  await p.waitForTimeout(2500);   // (the game keeps reporting its frame twice a second: that must not bring the button back)
+  ok('record: after sending, "Sent." stays and the button stays off (one video per press)', (await viewText(p)).includes('Sent.') && await p.isDisabled('#rec-make') && recordDispatches.length === 1);
   const rd = recordDispatches[0], rr = recordRuns[0] && recordRuns[0].recording;
   ok('record: the recording is sent with the game, its commit and a request name', !!rd && rd.inputs.game === recGame && /^[0-9a-f]{40}$/.test(rd.inputs.sha) && rd.inputs.sha === refOf(FAC, 'main') && rd.inputs.request.startsWith(recGame + '-'));
   ok('record: it holds the size, level, touches and the filmed part', !!rr && rr.size === '1080x2340' && rr.level === 2 && rr.finger.kind === (hasHand ? 'hand' : 'circle') && rr.log.some(e => e[1] === 's') && rr.log.some(e => e[1] === 'e') && rr.log.filter(e => e[1] === 'd').length >= 3, rr && JSON.stringify({ size: rr.size, level: rr.level, finger: rr.finger, n: rr.log.length }));
@@ -706,16 +709,18 @@ try {
   await p.fill('#hand-name', 'Test hand');
   await p.locator('.hand-pick img').scrollIntoViewIfNeeded();
   const hb = await p.locator('.hand-pick img').boundingBox(); await p.mouse.click(hb.x + hb.width * 0.4, hb.y + hb.height * 0.05);
+  ok('hands: after the fingertip it asks for the finger joint, and cannot be proposed before', (await p.innerText('#hand-step')).startsWith('2.') && await p.isDisabled('#hand-propose'));
+  const hb2 = await p.locator('.hand-pick img').boundingBox(); await p.mouse.click(hb2.x + hb2.width * 0.5, hb2.y + hb2.height * 0.44);
   await p.click('#hand-propose'); await until(p, 'Proposed:', 20000);
   const handPr = calls.filter(c => c.method === 'POST' && c.path === '/pulls').map(c => c.body).find(b => b.head.startsWith('hand/'));
   const hbr = handPr && refOf(FAC, handPr.head), hch = hbr ? gitS(FAC, 'diff', '--name-only', 'main', hbr).split('\n') : [];
   const hj = hbr ? JSON.parse(fileAt(FAC, hbr, 'marketing/hands/test-hand.json') || '{}') : {};
   ok('hands: proposed as its own branch and pull request, titled', !!hbr && handPr.title === 'Hand: Test hand');
   ok('hands: only the picture and its fingertip file', hch.length === 2 && hch.includes('marketing/hands/test-hand.png') && hch.includes('marketing/hands/test-hand.json'), hch.join(', '));
-  ok('hands: the fingertip is where it was clicked', hj.name === 'Test hand' && Math.abs(hj.tip[0] - 0.4) < 0.03 && Math.abs(hj.tip[1] - 0.05) < 0.03, JSON.stringify(hj));
+  ok('hands: the fingertip and the finger joint are where they were clicked', hj.name === 'Test hand' && Math.abs(hj.tip[0] - 0.4) < 0.03 && Math.abs(hj.tip[1] - 0.05) < 0.03 && Math.abs(hj.bend - 0.44) < 0.03, JSON.stringify(hj));
   const hpn = handPr ? pulls.find(x => x.ref === handPr.head).number : 0;
   await p.goto(ORIGIN + '/#submission/' + hpn); await until(p, 'Hand for videos');
-  ok('hands: the submission shows the hand with its fingertip', await p.waitForSelector('figure.hand .hand-tip', { timeout: 15000 }).then(() => true, () => false));
+  ok('hands: the submission shows the hand with its fingertip and joint', await p.waitForSelector('figure.hand .hand-tip', { timeout: 15000 }).then(() => true, () => false) && await p.isVisible('figure.hand .hand-bend'));
   await shot(p, 'hand-submission');
 
   // =====================================================================

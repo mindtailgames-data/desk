@@ -337,7 +337,7 @@ async function submissionView(n) {
     if (k.kind === 'hand') {
       const rd = await S.gh.reader(S.factory, p.head.sha, 'marketing/hands');
       const ids = files.map(f => /^marketing\/hands\/([a-z0-9-]+)\.png$/.exec(f.filename)).filter(Boolean).map(m => m[1]).filter(i => rd.has(i + '.json'));
-      for (const i of ids) { try { const c = JSON.parse(await rd.text(i + '.json')), tip = Array.isArray(c.tip) ? c.tip : [0.5, 0.05]; act.append(el('figure', { class: 'hand' }, el('div', { class: 'hand-pic' }, el('img', { src: 'data:image/png;base64,' + bytesToB64(await rd.bytes(i + '.png')), alt: '' }), el('span', { class: 'hand-tip', style: 'left:' + tip[0] * 100 + '%;top:' + tip[1] * 100 + '%' })), el('figcaption', { class: 'small', text: String(c.name || i) + ' (the red dot is the fingertip)' }))); } catch (e) {} }
+      for (const i of ids) { try { const c = JSON.parse(await rd.text(i + '.json')), tip = Array.isArray(c.tip) ? c.tip : [0.5, 0.05]; act.append(el('figure', { class: 'hand' }, el('div', { class: 'hand-pic' }, el('img', { src: 'data:image/png;base64,' + bytesToB64(await rd.bytes(i + '.png')), alt: '' }), typeof c.bend === 'number' ? el('span', { class: 'hand-bend', style: 'top:' + c.bend * 100 + '%' }) : null, el('span', { class: 'hand-tip', style: 'left:' + tip[0] * 100 + '%;top:' + tip[1] * 100 + '%' })), el('figcaption', { class: 'small', text: String(c.name || i) + ' (red dot: the fingertip; dashed line: the finger joint)' }))); } catch (e) {} }
     }
     if (k.kind === 'art') act.append(el('button', { type: 'button', text: 'Preview the art on the kit screens', onclick: () => play('Art preview: ' + p.title, async () => {
       const kit = await S.gh.reader(S.factory, p.head.sha, 'kit'), starter = await S.gh.reader(S.factory, p.head.sha, 'templates/starter');
@@ -1111,7 +1111,8 @@ async function handsAt(sha) {
   const rd = await S.gh.reader(S.factory, sha, 'marketing/hands');
   const ids = (await rd.list('')).filter(n => /^[a-z0-9][a-z0-9-]*\.json$/.test(n)).map(n => n.slice(0, -5)).filter(i => rd.has(i + '.png')).sort();
   return (await pool(ids, 4, async id => {
-    try { const c = JSON.parse(await rd.text(id + '.json')); return { id, name: String(c.name || id), tip: Array.isArray(c.tip) ? c.tip : [0.5, 0.05], src: 'data:image/png;base64,' + bytesToB64(await rd.bytes(id + '.png')) }; }
+    try { const c = JSON.parse(await rd.text(id + '.json')); const tip = Array.isArray(c.tip) ? c.tip : [0.5, 0.05];
+      return { id, name: String(c.name || id), tip, bend: typeof c.bend === 'number' ? c.bend : tip[1] + 0.4 * (1 - tip[1]), src: 'data:image/png;base64,' + bytesToB64(await rd.bytes(id + '.png')) }; }
     catch (e) { return null; }
   })).filter(Boolean);
 }
@@ -1161,7 +1162,7 @@ async function recordView() {
     const handRow = el('label', {}, 'Hand', el('div', { class: 'row' }, hand, handPic));
     const fingerCfg = () => {
       const k = kind.value, h = hands.find(x => x.id === hand.value), s = parseInt(size.value, 10);
-      return k === 'hand' && h ? { kind: 'hand', hand: h.id, size: s, src: h.src, tip: h.tip } : k === 'circle' ? { kind: 'circle', size: s } : { kind: 'none' };
+      return k === 'hand' && h ? { kind: 'hand', hand: h.id, size: s, src: h.src, tip: h.tip, bend: h.bend } : k === 'circle' ? { kind: 'circle', size: s } : { kind: 'none' };
     };
     const fingerChanged = () => {
       const h = hands.find(x => x.id === hand.value);
@@ -1210,8 +1211,12 @@ async function recordView() {
       fit(); f.update();
     };
     const secs = n => (n / 60).toFixed(1) + ' s';
+    let shown = '';   // (what is drawn now: the frame reports, twice a second, redraw only when it changes; the filming clock updates in place)
     const update = () => {
       const f = filming; if (!f || !stage.isConnected) return;
+      const key = f.state + (f.state === 'playing' ? ':' + (f.frame > REC_OPEN_MAX * 60) + (f.frame >= 1) : '') + ':' + (f.log ? f.log.length : 0) + ':' + f.seed;
+      if (key === shown) { if (f.state === 'filming') { const t = document.getElementById('rec-time'); if (t) t.textContent = secs(Math.max(0, f.frame - f.from)) + ' of ' + REC_MAX + ' s'; } return; }
+      shown = key;
       const make = el('button', { type: 'button', id: 'rec-make', text: 'Make the video' }), again = el('button', { type: 'button', class: 'ghost', id: 'rec-again', text: 'Start over', onclick: load });
       if (f.state === 'playing') {
         const tooLong = f.frame > REC_OPEN_MAX * 60;
@@ -1315,12 +1320,15 @@ async function recordView() {
 }
 // the hands for the videos, and a new one proposed for approval (marketing/hands/<id>.png + <id>.json)
 function handsCard(hands) {
-  const pic = h => el('div', { class: 'hand-pic' }, el('img', { src: h.src, alt: '' }), el('span', { class: 'hand-tip', style: 'left:' + h.tip[0] * 100 + '%;top:' + h.tip[1] * 100 + '%' }));
+  const pic = h => el('div', { class: 'hand-pic' }, el('img', { src: h.src, alt: '' }),
+    typeof h.bend === 'number' ? el('span', { class: 'hand-bend', style: 'top:' + h.bend * 100 + '%' }) : null,
+    el('span', { class: 'hand-tip', style: 'left:' + h.tip[0] * 100 + '%;top:' + h.tip[1] * 100 + '%' }));
   const file = el('input', { type: 'file', id: 'hand-file', accept: 'image/png,image/webp' }), name = el('input', { type: 'text', id: 'hand-name', maxlength: '60', placeholder: 'e.g. Cartoon hand, light skin' });
   const preview = el('div', { class: 'hand-pick', hidden: true }), status = el('div', { class: 'stack' });
   const propose = el('button', { type: 'button', id: 'hand-propose', text: 'Propose for approval', disabled: true });
-  let made = null;   // { bytes, src, tip }
-  const ready = () => { propose.disabled = !(made && name.value.trim()); };
+  let made = null;   // { bytes, src, tip, bend }; the next click sets: 'tip', then 'bend'
+  let placing = 'tip';
+  const ready = () => { propose.disabled = !(made && typeof made.bend === 'number' && name.value.trim()); };
   file.addEventListener('change', async () => {
     status.replaceChildren(); made = null; preview.hidden = true; ready();
     const f = file.files && file.files[0]; if (!f) return;
@@ -1330,10 +1338,18 @@ function handsCard(hands) {
       const c = document.createElement('canvas'); c.width = w; c.height = h; const g = c.getContext('2d'); g.imageSmoothingQuality = 'high'; g.drawImage(bmp, 0, 0, w, h);
       const corner = g.getImageData(0, 0, 1, 1).data[3];
       const bytes = new Uint8Array(await (await new Promise(ok => c.toBlob(ok, 'image/png'))).arrayBuffer());
-      made = { bytes, src: c.toDataURL('image/png'), tip: [0.5, 0.05] };
-      const draw = () => preview.replaceChildren(el('p', { class: 'small', text: 'Click the fingertip: that point is where the touch is on the video.' }), pic(made));
+      made = { bytes, src: c.toDataURL('image/png'), tip: [0.5, 0.05], bend: null }; placing = 'tip';
+      const draw = () => preview.replaceChildren(el('p', { class: 'small', id: 'hand-step', text: placing === 'tip'
+        ? '1. Click the fingertip: the point that touches the screen on the video.'
+        : '2. Click where the finger joins the hand (its knuckle): on a tap, everything above that line bends toward it, as a finger pressing the glass. Click again to change either point (fingertip first).' }), pic(made));
       draw(); preview.hidden = false;
-      preview.onclick = ev => { const img = preview.querySelector('img'); if (!img || !made) return; const r = img.getBoundingClientRect(); made.tip = [Math.min(1, Math.max(0, (ev.clientX - r.left) / r.width)), Math.min(1, Math.max(0, (ev.clientY - r.top) / r.height))].map(v => Math.round(v * 1000) / 1000); draw(); };
+      preview.onclick = ev => {
+        const img = preview.querySelector('img'); if (!img || !made) return;
+        const r = img.getBoundingClientRect(), fx = Math.min(1, Math.max(0, (ev.clientX - r.left) / r.width)), fy = Math.min(1, Math.max(0, (ev.clientY - r.top) / r.height)), k = v => Math.round(v * 1000) / 1000;
+        if (placing === 'tip') { made.tip = [k(fx), k(fy)]; made.bend = null; placing = 'bend'; }
+        else if (fy > made.tip[1] + 0.03 && fy < 0.98) { made.bend = k(fy); placing = 'tip'; }
+        draw(); ready();
+      };
       if (corner > 0) status.replaceChildren(note('warn', 'The picture does not look see-through around the hand (its corner is not transparent). A hand on a background shows that background on the video: a PNG with a transparent background is best.'));
       ready();
     } catch (e) { status.replaceChildren(note('bad', e.message || 'This file cannot be read as a picture.')); }
@@ -1348,14 +1364,14 @@ function handsCard(hands) {
       const branch = 'hand/' + id + '-' + Math.random().toString(36).slice(2, 6);
       await S.gh.commitFiles(S.factory, branch, { base: 'main', message: 'Hand for videos: ' + title, write: [
         { path: 'marketing/hands/' + id + '.png', bytes: made.bytes },
-        { path: 'marketing/hands/' + id + '.json', bytes: new TextEncoder().encode(JSON.stringify({ name: title, tip: made.tip }) + '\n') }] });
-      const pr = await S.gh.post(F() + '/pulls', { title: 'Hand: ' + title, head: branch, base: 'main', body: 'Proposed from Desk by @' + S.user.login + ': a hand for marketing videos (Record tab).\n\nmarketing/hands/' + id + '.png, fingertip at ' + made.tip.join(', ') + ' (0-1 across, down).' });
+        { path: 'marketing/hands/' + id + '.json', bytes: new TextEncoder().encode(JSON.stringify({ name: title, tip: made.tip, bend: made.bend }) + '\n') }] });
+      const pr = await S.gh.post(F() + '/pulls', { title: 'Hand: ' + title, head: branch, base: 'main', body: 'Proposed from Desk by @' + S.user.login + ': a hand for marketing videos (Record tab).\n\nmarketing/hands/' + id + '.png, fingertip at ' + made.tip.join(', ') + ' (0-1 across, down), finger joint at ' + made.bend + ' (down).' });
       status.replaceChildren(note('good', el('span', {}, 'Proposed: ', el('a', { href: '#submission/' + pr.number, text: 'submission #' + pr.number }), '. It can be chosen here once the owner approves it.')));
       made = null; file.value = ''; name.value = ''; preview.hidden = true;
     } catch (e) { status.replaceChildren(note('bad', e.message)); propose.disabled = false; }
   });
   return el('section', { class: 'card', id: 'rec-hands' }, el('h2', { text: 'Hands' }),
-    el('p', { class: 'small muted', text: 'The hands a video can show. The red dot is the fingertip: the point that touches. Add one: a PNG with a transparent background (it is made at most 512 pixels on its longer side), its name, and a click on its fingertip; it is proposed for approval like art.' }),
+    el('p', { class: 'small muted', text: 'The hands a video can show. The red dot is the fingertip: the point that touches. The dashed line is the finger joint: on a tap, the part above it bends toward it (the palm stays still). Add one: a PNG with a transparent background (it is made at most 512 pixels on its longer side), its name, a click on its fingertip and one on its finger joint; it is proposed for approval like art.' }),
     hands.length ? el('div', { class: 'hands' }, ...hands.map(h => el('figure', { class: 'hand' }, pic(h), el('figcaption', { class: 'small', text: h.name })))) : el('p', { class: 'muted', text: 'No hands yet.' }),
     el('h3', { text: 'Add a hand' }), el('div', { class: 'form' }, el('label', {}, 'Picture', file), el('label', {}, 'Name', name)), preview, el('div', { class: 'row' }, propose), status);
 }
