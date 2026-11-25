@@ -1,7 +1,7 @@
 // Desk: the factory's website. Every view reads live from the private repositories with the signed-in person's own
 // token; nothing is stored anywhere but in this browser's memory (and the token in this browser, if asked to).
 import { sealForGitHub } from './seal.js';
-import { client, session, GitHubError } from './gh.js';
+import { client, session, GitHubError, bytesToB64 } from './gh.js';
 import { buildGame, settingsOf, settingsErrors, MILESTONE_LEVELS, filesScript } from './builder.js';
 import { render as renderMd, esc } from './md.js';
 import { prepare } from './art.js';
@@ -71,6 +71,7 @@ function prKind(pr) {
   const b = pr.head.ref;
   if (b.startsWith('submit/')) return { kind: 'game', id: b.slice(7) };
   if (b.startsWith('art/')) return { kind: 'art' };
+  if (b.startsWith('hand/')) return { kind: 'hand' };
   return { kind: 'other' };
 }
 async function prs(state) { return S.gh.get(F() + '/pulls?state=' + state + '&sort=updated&direction=desc&per_page=40'); }
@@ -239,7 +240,7 @@ async function downloadsReader(repo) {
   try { return await S.gh.reader(repo, (await S.gh.get('/repos/' + repo + '/git/ref/heads/downloads')).object.sha, ''); }
   catch (e) { if (e.status === 404) return null; throw e; }
 }
-const MIME = { apk: 'application/vnd.android.package-archive', aab: 'application/octet-stream', html: 'text/html', md: 'text/markdown', png: 'image/png', jpg: 'image/jpeg', json: 'application/json' };
+const MIME = { mp4: 'video/mp4', apk: 'application/vnd.android.package-archive', aab: 'application/octet-stream', html: 'text/html', md: 'text/markdown', png: 'image/png', jpg: 'image/jpeg', json: 'application/json' };
 // a file from a downloads branch, saved by the browser under `name`
 async function saveFile(dl, filePath, name, btn) {
   const label = btn && btn.textContent;
@@ -305,7 +306,7 @@ async function submissionsView(state) {
     list.forEach((p, i) => {
       const k = prKind(p);
       box.append(el('a', { class: 'item', href: '#submission/' + p.number },
-        el('span', { class: 'tag', text: k.kind === 'game' ? 'Game' : k.kind === 'art' ? 'Art' : 'Factory' }),
+        el('span', { class: 'tag', text: k.kind === 'game' ? 'Game' : k.kind === 'art' ? 'Art' : k.kind === 'hand' ? 'Hand' : 'Factory' }),
         el('span', { class: 'title', text: p.title }),
         state === 'open' ? checkChip(checks[i]) : chip(p.merged_at ? 'good' : '', p.merged_at ? 'Approved' : 'Declined'),
         el('span', { class: 'meta', title: full(p.updated_at) + ' (Istanbul)', text: '#' + p.number + ' · ' + p.user.login + ' · updated ' + ago(p.updated_at) })));
@@ -322,17 +323,22 @@ async function submissionView(n) {
     const k = prKind(p), check = await checkOf(p.head.sha).catch(() => ({ state: 'none' }));
     const comments = await S.gh.get(F() + '/issues/' + n + '/comments?per_page=100');
     const files = await S.gh.get(F() + '/pulls/' + n + '/files?per_page=100');
-    if (k.kind === 'other') { const g = files.map(f => /^games\/([^/]+)\//.exec(f.filename)).find(Boolean); if (g) { k.kind = 'game'; k.id = g[1]; } else if (files.every(f => f.filename.startsWith('kit/art/'))) k.kind = 'art'; }
+    if (k.kind === 'other') { const g = files.map(f => /^games\/([^/]+)\//.exec(f.filename)).find(Boolean); if (g) { k.kind = 'game'; k.id = g[1]; } else if (files.every(f => f.filename.startsWith('kit/art/'))) k.kind = 'art'; else if (files.every(f => f.filename.startsWith('marketing/hands/'))) k.kind = 'hand'; }
     const report = comments.filter(c => c.user && c.user.type === 'Bot' && /Factory check|Art pack/.test(c.body)).slice(-1)[0];
     view.replaceChildren();
     const open = p.state === 'open';
     const stateChip = open ? checkChip(check) : chip(p.merged_at ? 'good' : '', p.merged_at ? 'Approved and merged' : 'Declined');
-    view.append(el('div', { class: 'head' }, el('div', {}, el('span', { class: 'tag', text: k.kind === 'game' ? 'Game · ' + k.id : k.kind === 'art' ? 'Art' : 'Factory' }), el('h1', { text: p.title }),
+    view.append(el('div', { class: 'head' }, el('div', {}, el('span', { class: 'tag', text: k.kind === 'game' ? 'Game · ' + k.id : k.kind === 'art' ? 'Art' : k.kind === 'hand' ? 'Hand for videos' : 'Factory' }), el('h1', { text: p.title }),
       el('p', { class: 'muted', text: '#' + n + ' by ' + p.user.login + ' · branch ' + p.head.ref + ' · updated ' + ago(p.updated_at) + ' (' + full(p.updated_at) + ', Istanbul)' })),
       el('div', { class: 'row' }, stateChip, el('a', { href: p.html_url, target: '_blank', rel: 'noopener noreferrer', text: 'Open on GitHub' }))));
 
     const act = el('div', { class: 'row' }), msg = el('div', { class: 'stack' });
     if (k.kind === 'game') act.append(el('button', { type: 'button', text: 'Play this version', onclick: () => play(p.title, () => gamePage(p.head.sha, k.id)) }));
+    if (k.kind === 'hand') {
+      const rd = await S.gh.reader(S.factory, p.head.sha, 'marketing/hands');
+      const ids = files.map(f => /^marketing\/hands\/([a-z0-9-]+)\.png$/.exec(f.filename)).filter(Boolean).map(m => m[1]).filter(i => rd.has(i + '.json'));
+      for (const i of ids) { try { const c = JSON.parse(await rd.text(i + '.json')), tip = Array.isArray(c.tip) ? c.tip : [0.5, 0.05]; act.append(el('figure', { class: 'hand' }, el('div', { class: 'hand-pic' }, el('img', { src: 'data:image/png;base64,' + bytesToB64(await rd.bytes(i + '.png')), alt: '' }), el('span', { class: 'hand-tip', style: 'left:' + tip[0] * 100 + '%;top:' + tip[1] * 100 + '%' })), el('figcaption', { class: 'small', text: String(c.name || i) + ' (the red dot is the fingertip)' }))); } catch (e) {} }
+    }
     if (k.kind === 'art') act.append(el('button', { type: 'button', text: 'Preview the art on the kit screens', onclick: () => play('Art preview: ' + p.title, async () => {
       const kit = await S.gh.reader(S.factory, p.head.sha, 'kit'), starter = await S.gh.reader(S.factory, p.head.sha, 'templates/starter');
       return screensOf(kit, await buildGame(kit, starter, { bots: false }));
@@ -1084,8 +1090,278 @@ async function artView() {
   } catch (e) { fail(view, e); }
 }
 
+// ---------- Record: videos of a level for marketing ----------
+// You play a level here; the cloud plays it again exactly and films it at the phone's real pixels, 60 frames a second,
+// with the game's sound (the release repository's "Record a video" workflow). GameFactory marketing/recorder/runtime.js
+// runs in both places (here live, there frame by frame): the same game clock, random numbers and storage, every touch
+// written down with its frame, and state checks that make the cloud stop rather than film something else. The videos
+// are on the release repository's "videos" branch (the last 20). Hands for the videos: marketing/hands/<id>.png and
+// <id>.json in the factory, proposed for approval like art.
+const PHONES = [
+  { id: '1080x2400', w: 360, h: 800, label: '1080 × 2400 · 20:9 (most Android phones)' },
+  { id: '1080x2340', w: 360, h: 780, label: '1080 × 2340 · 19.5:9 (Samsung Galaxy S)' },
+  { id: '1080x1920', w: 360, h: 640, label: '1080 × 1920 · 16:9 (older phones; the 9:16 ad size)' }];
+const REC_MAX = 60, REC_OPEN_MAX = 10 * 60;   // seconds filmed at most (the runtime stops by itself), and a game open at most before filming ends
+let filming = null;   // the game open in the Record tab
+const recPrefs = () => { try { return JSON.parse(localStorage.getItem('desk.record') || '{}') || {}; } catch (e) { return {}; } };
+const saveRecPrefs = p => { try { localStorage.setItem('desk.record', JSON.stringify(Object.assign(recPrefs(), p))); } catch (e) {} };
+const recPending = () => { try { const a = JSON.parse(localStorage.getItem('desk.record.pending') || '[]'); return Array.isArray(a) ? a.filter(x => x && Date.now() - x.at < 3 * 3600000) : []; } catch (e) { return []; } };
+const saveRecPending = a => { try { localStorage.setItem('desk.record.pending', JSON.stringify(a)); } catch (e) {} };
+async function handsAt(sha) {
+  const rd = await S.gh.reader(S.factory, sha, 'marketing/hands');
+  const ids = (await rd.list('')).filter(n => /^[a-z0-9][a-z0-9-]*\.json$/.test(n)).map(n => n.slice(0, -5)).filter(i => rd.has(i + '.png')).sort();
+  return (await pool(ids, 4, async id => {
+    try { const c = JSON.parse(await rd.text(id + '.json')); return { id, name: String(c.name || id), tip: Array.isArray(c.tip) ? c.tip : [0.5, 0.05], src: 'data:image/png;base64,' + bytesToB64(await rd.bytes(id + '.png')) }; }
+    catch (e) { return null; }
+  })).filter(Boolean);
+}
+async function videosReader() { try { return await S.gh.reader(S.release, (await S.gh.get(R() + '/git/ref/heads/videos')).object.sha, ''); } catch (e) { if (e.status === 404) return null; throw e; } }
+async function packRecording(obj) {
+  const s = new Blob([JSON.stringify(obj)]).stream().pipeThrough(new CompressionStream('deflate-raw'));
+  return bytesToB64(new Uint8Array(await new Response(s).arrayBuffer()));
+}
+const filmedOf = log => { const at = k => { const e = (log || []).find(x => x[1] === k); return e ? e[0] : -1; }; return { from: at('s'), to: at('e') }; };
+window.addEventListener('message', e => {
+  const fr = document.getElementById('rec-frame');
+  if (!filming || !fr || e.source !== fr.contentWindow || !e.data || typeof e.data.rec !== 'string') return;
+  const d = e.data, f = filming;
+  if (d.rec === 'frame' && Number.isInteger(d.frame)) f.frame = d.frame;
+  else if (d.rec === 'started' && Number.isInteger(d.frame)) { f.from = d.frame; f.state = 'filming'; }
+  else if (d.rec === 'log' && Array.isArray(d.log)) { f.log = d.log; f.frame = d.frame; f.state = 'done'; }
+  else if (d.rec === 'restart') f.state = 'restarted';
+  else return;
+  if (f.update) f.update();
+});
+
+async function recordView() {
+  const view = cur;
+  page(view, 'Record', 'Videos of a level for marketing, exactly as a phone shows it. Play the level here; the cloud plays it again the same way and films it at the phone\'s real pixels (1080 across, 60 frames a second), with the game\'s sound.');
+  if (!S.canBuild) { view.append(note('warn', 'Recording needs the release repository in your token (Actions: Read and write; Contents: Read-only). Sign out and sign in with such a token.')); return; }
+  loading(view);
+  try {
+    const sha = await mainSha();
+    const [list, hands] = await Promise.all([games(sha), handsAt(sha).catch(() => [])]);
+    view.lastChild.remove();
+    const titles = new Map(list.map(g => [g.id, g.title || g.id]));
+    const pref = recPrefs();
+    // ----- what to film
+    const game = el('select', { id: 'rec-game' }, ...list.filter(g => !g.error).map(g => el('option', { value: g.id, text: (g.title || g.id) + ' (' + g.id + ')' })));
+    if (list.some(g => g.id === pref.game)) game.value = pref.game;
+    const level = el('input', { id: 'rec-level', type: 'number', min: '1', value: String(Math.max(1, parseInt(pref.level, 10) || 1)) });
+    const phone = el('select', { id: 'rec-phone' }, ...PHONES.map(p => el('option', { value: p.id, text: p.label })));
+    if (PHONES.some(p => p.id === pref.size)) phone.value = pref.size;
+    // ----- the finger on the video
+    const kind = el('select', { id: 'rec-kind' }, el('option', { value: 'none', text: 'Nothing: only the game' }), el('option', { value: 'circle', text: 'A circle' }), el('option', { value: 'hand', text: 'A hand', disabled: !hands.length }));
+    kind.value = ['none', 'circle', 'hand'].includes(pref.kind) && (pref.kind !== 'hand' || hands.length) ? pref.kind : 'circle';
+    const hand = el('select', { id: 'rec-hand' }, ...hands.map(h => el('option', { value: h.id, text: h.name })));
+    if (hands.some(h => h.id === pref.hand)) hand.value = pref.hand;
+    const handPic = el('img', { class: 'rec-hand-pic', alt: '' });
+    const size = el('input', { id: 'rec-size', type: 'range', min: '30', max: '220', step: '2', value: String(Math.min(220, Math.max(30, parseInt(pref.fsize, 10) || 90))) });
+    const sizeOut = el('span', { class: 'small muted' });
+    const handRow = el('label', {}, 'Hand', el('div', { class: 'row' }, hand, handPic));
+    const fingerCfg = () => {
+      const k = kind.value, h = hands.find(x => x.id === hand.value), s = parseInt(size.value, 10);
+      return k === 'hand' && h ? { kind: 'hand', hand: h.id, size: s, src: h.src, tip: h.tip } : k === 'circle' ? { kind: 'circle', size: s } : { kind: 'none' };
+    };
+    const fingerChanged = () => {
+      const h = hands.find(x => x.id === hand.value);
+      handRow.hidden = kind.value !== 'hand'; if (h) handPic.src = h.src;
+      sizeOut.textContent = size.value + ' px on the phone screen = ' + size.value * 3 + ' pixels in the video';
+      size.closest('label').hidden = kind.value === 'none';
+      saveRecPrefs({ kind: kind.value, hand: hand.value, fsize: parseInt(size.value, 10) });
+      const fr = document.getElementById('rec-frame');
+      if (filming && fr && fr.contentWindow) fr.contentWindow.postMessage({ rec: 'finger', finger: fingerCfg() }, '*');
+    };
+    for (const x of [kind, hand]) x.addEventListener('change', fingerChanged);
+    size.addEventListener('input', fingerChanged);
+    const open = el('button', { type: 'button', id: 'rec-open', text: 'Open the game' });
+    view.append(el('section', { class: 'card' }, el('h2', { text: 'New video' }),
+      el('div', { class: 'form' },
+        el('label', {}, 'Game', game), el('label', {}, 'Start at level', level), el('label', {}, 'Phone', phone),
+        el('label', {}, 'Touches on the video', kind), handRow,
+        el('label', {}, 'Size of the circle or hand', size, sizeOut)),
+      el('p', { class: 'small muted', text: 'The touches can be changed any time, also after filming: the cloud draws the ones chosen when you press "Make the video". The game is the latest approved version (main).' }),
+      el('div', { class: 'row' }, open)));
+    fingerChanged();
+
+    // ----- the game, at the phone's own size
+    const frame = el('iframe', { id: 'rec-frame', title: 'Game', sandbox: 'allow-scripts' });
+    const box = el('div', { class: 'rec-phone' }, frame);
+    const msg = el('div', { class: 'stack' }), ctl = el('div', { class: 'row' }), lang = el('select', { id: 'rec-lang' }), langRow = el('label', { class: 'inline' }, 'Language ', lang);
+    const stage = el('section', { class: 'card rec-stage', id: 'rec-stage', hidden: true }, box, el('div', { class: 'stack' }, el('h2', { id: 'rec-title' }), langRow, msg, ctl,
+      el('p', { class: 'small muted', text: 'Everything from the moment the game opens is played again in the cloud, but only the part between "Start filming" and "Stop filming" is in the video (' + REC_MAX + ' seconds at most: it stops by itself). Play as on a phone: click to tap, hold the button to drag. Change the language here, not in the game\'s Settings (that restarts the game).' })));
+    view.append(stage);
+    const fit = () => {
+      if (!filming) return;
+      const p = PHONES.find(x => x.id === filming.size), k = Math.max(0.45, Math.min(1.15, (window.innerHeight - 110) / p.h, (stage.clientWidth || 800) < 700 ? ((stage.clientWidth || 360) - 40) / p.w : 9));
+      frame.style.width = p.w + 'px'; frame.style.height = p.h + 'px'; frame.style.transform = 'scale(' + k + ')';
+      box.style.width = Math.round(p.w * k) + 'px'; box.style.height = Math.round(p.h * k) + 'px';
+    };
+    window.addEventListener('resize', () => { if (frame.isConnected) fit(); });
+    const load = () => {
+      const f = filming;
+      f.seed = (Math.random() * 4294967296) >>> 0; f.base = Math.floor(Date.now() / 1000) * 1000;
+      f.lang = f.langs.length > 1 ? lang.value : f.langs[0];
+      f.storage = { ['dk.' + f.id + '.progress']: JSON.stringify({ next: f.level }) };
+      if (f.langs.length > 1) f.storage['dk.' + f.id + '.lang'] = JSON.stringify(f.lang);
+      f.log = null; f.from = -1; f.frame = 0; f.state = 'playing';
+      const cfg = { mode: 'live', seed: f.seed, base: f.base, storage: f.storage, finger: fingerCfg() };
+      frame.srcdoc = f.built.page.replace('<head>\n', () => '<head>\n<script>window.__REC=' + JSON.stringify(cfg).replace(/</g, '\\u003c') + ';<\/script>\n<script>' + f.runtime + '<\/script>\n' + f.built.files);
+      fit(); f.update();
+    };
+    const secs = n => (n / 60).toFixed(1) + ' s';
+    const update = () => {
+      const f = filming; if (!f || !stage.isConnected) return;
+      const make = el('button', { type: 'button', id: 'rec-make', text: 'Make the video' }), again = el('button', { type: 'button', class: 'ghost', id: 'rec-again', text: 'Start over', onclick: load });
+      if (f.state === 'playing') {
+        const tooLong = f.frame > REC_OPEN_MAX * 60;
+        msg.replaceChildren(tooLong ? note('warn', 'The game has been open for over 10 minutes: start over (the cloud plays everything from the moment it opens).') : el('p', { text: 'Playing; nothing is filmed yet. Get to where the video should begin, then press Start filming.' }));
+        ctl.replaceChildren(el('button', { type: 'button', id: 'rec-start', text: 'Start filming', disabled: tooLong || f.frame < 1, onclick: () => frame.contentWindow.postMessage({ rec: 'start' }, '*') }), again);
+      } else if (f.state === 'filming') {
+        msg.replaceChildren(el('p', {}, el('strong', { class: 'rec-live', text: '● Filming ' }), el('span', { id: 'rec-time', text: secs(Math.max(0, f.frame - f.from)) + ' of ' + REC_MAX + ' s' })));
+        ctl.replaceChildren(el('button', { type: 'button', id: 'rec-stop', text: 'Stop filming', onclick: () => frame.contentWindow.postMessage({ rec: 'stop' }, '*') }));
+      } else if (f.state === 'done') {
+        const r = filmedOf(f.log), out = el('div', { class: 'stack' });
+        msg.replaceChildren(el('p', { id: 'rec-filmed', text: 'Filmed ' + secs(r.to - r.from) + '. The video starts where you pressed Start filming.' }), out);
+        make.addEventListener('click', () => makeVideo(make, out));
+        ctl.replaceChildren(make, again);
+      } else {
+        msg.replaceChildren(note('bad', 'The game restarted itself (its language was changed in its own Settings), so this recording cannot be played again. Choose the language here and start over.'));
+        ctl.replaceChildren(again);
+      }
+    };
+    lang.addEventListener('change', () => { if (filming) load(); });
+    const makeVideo = async (btn, out) => {
+      const f = filming, fc = fingerCfg(), r = filmedOf(f.log);
+      btn.disabled = true; out.replaceChildren(el('p', { class: 'muted', text: 'Sending…' }));
+      try {
+        const recording = { game: f.id, level: f.level, lang: f.lang, size: f.size, seed: f.seed, base: f.base, storage: f.storage, finger: fc.kind === 'hand' ? { kind: 'hand', hand: fc.hand, size: fc.size } : fc.kind === 'circle' ? { kind: 'circle', size: fc.size } : { kind: 'none' }, log: f.log };
+        const packed = await packRecording(recording);
+        if (packed.length > 60000) throw new Error('This recording is too big to send to GitHub (' + Math.round(packed.length / 1000) + ' KB of 60). Film a shorter part, or press Start filming sooner after opening the game.');
+        const req = f.id + '-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 6);
+        await S.gh.post(R() + '/actions/workflows/record.yml/dispatches', { ref: 'main', inputs: { game: f.id, sha: f.sha, recording: packed, request: req } });
+        saveRecPending(recPending().concat([{ req, game: f.id, level: f.level, size: f.size, seconds: +((r.to - r.from) / 60).toFixed(1), at: Date.now() }]));
+        out.replaceChildren(note('good', 'Sent. The cloud is filming it: it appears under Videos below in about ' + Math.max(5, Math.round(4 + (r.to - r.from) / 60 / 5)) + ' minutes (you can leave this page).'));
+        refreshVideos();
+      } catch (e) { out.replaceChildren(note('bad', e.message)); btn.disabled = false; }
+    };
+    open.addEventListener('click', async () => {
+      saveRecPrefs({ game: game.value, level: Math.max(1, parseInt(level.value, 10) || 1), size: phone.value });
+      stage.hidden = false; msg.replaceChildren(el('p', { class: 'muted', text: 'Building the game from GitHub…' })); ctl.replaceChildren(); open.disabled = true;
+      try {
+        const sha = await mainSha();
+        const [kit, g, rt] = await Promise.all([S.gh.reader(S.factory, sha, 'kit'), S.gh.reader(S.factory, sha, 'games/' + game.value), S.gh.reader(S.factory, sha, 'marketing/recorder')]);
+        const built = await buildGame(kit, g, { bots: false });
+        const runtime = await rt.text('runtime.js');
+        if (/<\/script/i.test(runtime)) throw new Error('marketing/recorder/runtime.js must not contain </script');
+        const langs = Array.isArray(built.cfg.languages) && built.cfg.languages.length ? built.cfg.languages : ['en'];
+        filming = { id: built.cfg.id, title: built.cfg.title, sha, built: { page: built.page, files: typeof built.files === 'string' ? built.files : '' }, runtime, langs, size: phone.value, level: Math.max(1, parseInt(level.value, 10) || 1), update };
+        $('#rec-title').textContent = built.cfg.title + ' · level ' + filming.level + ' · ' + PHONES.find(p => p.id === phone.value).label.split(' · ')[0];
+        lang.replaceChildren(...langs.map(l => el('option', { value: l, text: ({ en: 'English', tr: 'Türkçe' })[l] || l }))); langRow.hidden = langs.length < 2;
+        load(); stage.scrollIntoView({ block: 'start', behavior: 'smooth' });
+      } catch (e) { msg.replaceChildren(note('bad', e.message)); }
+      open.disabled = false;
+    });
+
+    // ----- the videos made
+    const vids = el('section', { class: 'card', id: 'rec-videos' }, el('h2', { text: 'Videos' }), el('p', { class: 'small muted', text: 'The last 20 (the release repository\'s "videos" branch). ' + ISTANBUL }));
+    const vlist = el('div', { class: 'list' }); vids.append(vlist); view.append(vids);
+    let timer = 0;
+    const refreshVideos = async () => {
+      clearTimeout(timer);
+      try {
+        const dl = await videosReader();
+        const dirs = dl ? [...new Set(dl.paths().filter(p => /^rec-[^/]+\/video\.json$/.test(p)).map(p => p.split('/')[0]))] : [];
+        const infos = (await pool(dirs, 4, async d => { try { return Object.assign(JSON.parse(await dl.text(d + '/video.json')), { dir: d }); } catch (e) { return null; } })).filter(Boolean).sort((a, b) => (b.run || 0) - (a.run || 0));
+        const done = new Set(infos.map(v => v.request)), waiting = recPending().filter(p => !done.has(p.req));
+        saveRecPending(waiting);
+        let runs = [];
+        if (waiting.length) try { runs = (await S.gh.get(R() + '/actions/workflows/record.yml/runs?per_page=30')).workflow_runs || []; } catch (e) {}
+        const rows = waiting.map(p => {
+          const run = runs.find(x => (x.display_title || '').endsWith(p.req));
+          const failed = run && run.status === 'completed' && run.conclusion !== 'success';
+          return el('div', { class: 'item' }, failed ? chip('bad', 'Failed') : chip('warn run', run && run.status === 'in_progress' ? 'Filming' : 'Waiting'),
+            el('span', { class: 'title', text: (titles.get(p.game) || p.game) + ' · level ' + p.level }),
+            el('span', { class: 'meta', text: p.size.replace('x', ' × ') + ' · ' + p.seconds + ' s · sent ' + when(new Date(p.at).toISOString()) }),
+            run ? el('a', { href: run.html_url, target: '_blank', rel: 'noopener noreferrer', class: 'small', text: failed ? 'See why on GitHub' : 'On GitHub' }) : null);
+        });
+        for (const v of infos) {
+          const name = (v.game || 'game') + '-level' + (v.level || '') + '-' + (v.size || '') + '-' + v.request.split('-').slice(-2).join('');
+          const watch = el('div', { class: 'rec-video' });
+          const acts = v.ok ? el('div', { class: 'row' },
+            el('button', { type: 'button', class: 'ghost', text: 'Watch', onclick: async ev => {
+              const b = ev.target; if (watch.firstChild) { watch.replaceChildren(); b.textContent = 'Watch'; return; }
+              b.disabled = true; b.textContent = 'Loading…';
+              try { const url = URL.createObjectURL(new Blob([await dl.bytes(v.dir + '/video.mp4')], { type: 'video/mp4' })); watch.replaceChildren(el('video', { src: url, controls: true, autoplay: true, playsinline: true })); b.textContent = 'Close'; }
+              catch (e) { watch.replaceChildren(note('bad', e.message)); b.textContent = 'Watch'; }
+              b.disabled = false;
+            } }),
+            dlButton(dl, v.dir + '/video.mp4', name + '.mp4', 'Download .mp4' + fileSize(dl, v.dir + '/video.mp4'), ''),
+            dlButton(dl, v.dir + '/poster.png', name + '.png', 'First frame (.png)')) : null;
+          rows.push(el('div', { class: 'stack rec-row' }, el('div', { class: 'item' }, v.ok ? chip('good', 'Ready') : chip('bad', 'No video'),
+            el('span', { class: 'title', text: (titles.get(v.game) || v.game) + ' · level ' + v.level }),
+            el('span', { class: 'meta', title: v.date, text: [v.size ? v.size.replace('x', ' × ') : '', v.seconds ? v.seconds + ' s' : '', v.ok ? (v.sound ? 'with sound' : 'no sound') : '', v.finger && v.finger !== 'none' ? (v.finger === 'hand' ? 'a hand' : 'a circle') : '', v.by, v.date ? full(relDate(v.date)) : ''].filter(Boolean).join(' · ') })),
+            v.ok ? null : note('bad', (v.error || 'The cloud could not make it.') + ' '), acts, watch));
+        }
+        vlist.replaceChildren(...(rows.length ? rows : [el('p', { class: 'muted', text: 'No videos yet.' })]));
+        if (waiting.length && vlist.isConnected) timer = setTimeout(() => vlist.isConnected && refreshVideos(), 20000);
+      } catch (e) { vlist.replaceChildren(note('bad', e.message)); }
+    };
+    refreshVideos();
+
+    // ----- the hands
+    view.append(handsCard(hands));
+  } catch (e) { fail(view, e); }
+}
+// the hands for the videos, and a new one proposed for approval (marketing/hands/<id>.png + <id>.json)
+function handsCard(hands) {
+  const pic = h => el('div', { class: 'hand-pic' }, el('img', { src: h.src, alt: '' }), el('span', { class: 'hand-tip', style: 'left:' + h.tip[0] * 100 + '%;top:' + h.tip[1] * 100 + '%' }));
+  const file = el('input', { type: 'file', id: 'hand-file', accept: 'image/png,image/webp' }), name = el('input', { type: 'text', id: 'hand-name', maxlength: '60', placeholder: 'e.g. Cartoon hand, light skin' });
+  const preview = el('div', { class: 'hand-pick', hidden: true }), status = el('div', { class: 'stack' });
+  const propose = el('button', { type: 'button', id: 'hand-propose', text: 'Propose for approval', disabled: true });
+  let made = null;   // { bytes, src, tip }
+  const ready = () => { propose.disabled = !(made && name.value.trim()); };
+  file.addEventListener('change', async () => {
+    status.replaceChildren(); made = null; preview.hidden = true; ready();
+    const f = file.files && file.files[0]; if (!f) return;
+    try {
+      const bmp = await createImageBitmap(f), k = Math.min(1, 512 / Math.max(bmp.width, bmp.height)), w = Math.round(bmp.width * k), h = Math.round(bmp.height * k);
+      if (Math.min(w, h) < 64) throw new Error('The picture is too small: at least 64 pixels each way.');
+      const c = document.createElement('canvas'); c.width = w; c.height = h; const g = c.getContext('2d'); g.imageSmoothingQuality = 'high'; g.drawImage(bmp, 0, 0, w, h);
+      const corner = g.getImageData(0, 0, 1, 1).data[3];
+      const bytes = new Uint8Array(await (await new Promise(ok => c.toBlob(ok, 'image/png'))).arrayBuffer());
+      made = { bytes, src: c.toDataURL('image/png'), tip: [0.5, 0.05] };
+      const draw = () => preview.replaceChildren(el('p', { class: 'small', text: 'Click the fingertip: that point is where the touch is on the video.' }), pic(made));
+      draw(); preview.hidden = false;
+      preview.onclick = ev => { const img = preview.querySelector('img'); if (!img || !made) return; const r = img.getBoundingClientRect(); made.tip = [Math.min(1, Math.max(0, (ev.clientX - r.left) / r.width)), Math.min(1, Math.max(0, (ev.clientY - r.top) / r.height))].map(v => Math.round(v * 1000) / 1000); draw(); };
+      if (corner > 0) status.replaceChildren(note('warn', 'The picture does not look see-through around the hand (its corner is not transparent). A hand on a background shows that background on the video: a PNG with a transparent background is best.'));
+      ready();
+    } catch (e) { status.replaceChildren(note('bad', e.message || 'This file cannot be read as a picture.')); }
+  });
+  name.addEventListener('input', ready);
+  propose.addEventListener('click', async () => {
+    propose.disabled = true; status.replaceChildren(el('p', { class: 'muted', text: 'Uploading…' }));
+    try {
+      const title = name.value.trim().slice(0, 60);
+      let id = (title.toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'hand').slice(0, 30);
+      const taken = new Set(hands.map(h => h.id)); if (taken.has(id)) { let n = 2; while (taken.has(id + '-' + n)) n++; id += '-' + n; }
+      const branch = 'hand/' + id + '-' + Math.random().toString(36).slice(2, 6);
+      await S.gh.commitFiles(S.factory, branch, { base: 'main', message: 'Hand for videos: ' + title, write: [
+        { path: 'marketing/hands/' + id + '.png', bytes: made.bytes },
+        { path: 'marketing/hands/' + id + '.json', bytes: new TextEncoder().encode(JSON.stringify({ name: title, tip: made.tip }) + '\n') }] });
+      const pr = await S.gh.post(F() + '/pulls', { title: 'Hand: ' + title, head: branch, base: 'main', body: 'Proposed from Desk by @' + S.user.login + ': a hand for marketing videos (Record tab).\n\nmarketing/hands/' + id + '.png, fingertip at ' + made.tip.join(', ') + ' (0-1 across, down).' });
+      status.replaceChildren(note('good', el('span', {}, 'Proposed: ', el('a', { href: '#submission/' + pr.number, text: 'submission #' + pr.number }), '. It can be chosen here once the owner approves it.')));
+      made = null; file.value = ''; name.value = ''; preview.hidden = true;
+    } catch (e) { status.replaceChildren(note('bad', e.message)); propose.disabled = false; }
+  });
+  return el('section', { class: 'card', id: 'rec-hands' }, el('h2', { text: 'Hands' }),
+    el('p', { class: 'small muted', text: 'The hands a video can show. The red dot is the fingertip: the point that touches. Add one: a PNG with a transparent background (it is made at most 512 pixels on its longer side), its name, and a click on its fingertip; it is proposed for approval like art.' }),
+    hands.length ? el('div', { class: 'hands' }, ...hands.map(h => el('figure', { class: 'hand' }, pic(h), el('figcaption', { class: 'small', text: h.name })))) : el('p', { class: 'muted', text: 'No hands yet.' }),
+    el('h3', { text: 'Add a hand' }), el('div', { class: 'form' }, el('label', {}, 'Picture', file), el('label', {}, 'Name', name)), preview, el('div', { class: 'row' }, propose), status);
+}
+
 // ---------- routing ----------
-const VIEWS = { dashboard: dashboardView, submissions: submissionsView, submission: submissionView, submit: submitView, builds: buildsView, art: artView };
+const VIEWS = { dashboard: dashboardView, submissions: submissionsView, submission: submissionView, submit: submitView, builds: buildsView, record: recordView, art: artView };
 async function route() {
   if (!S) {
     const v = session.load();

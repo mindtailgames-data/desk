@@ -104,6 +104,7 @@ const checks = {};     // sha -> { status, conclusion }
 const runs = [];       // release builds
 const secrets = new Map();   // name -> { value (opened), updated_at }
 const adjustDispatches = [], adjustResults = {};   // (Check Adjust tokens: the starts, and each game's result)
+const recordDispatches = [], recordRuns = [];   // (Record a video: the starts, and their "runs")
 const KEYS = nacl.box.keyPair();
 const calls = [];      // every write Desk makes
 const outside = [];    // anything Desk tried to reach besides GitHub's API and its own files
@@ -117,6 +118,29 @@ function prFiles(p) {
   const head = refOf(FAC, p.ref); if (!head) return [];
   const base = gitS(FAC, 'merge-base', 'main', head);
   return gitS(FAC, 'diff', '--name-status', base, head).split('\n').filter(Boolean).map(l => { const [s, f] = l.split('\t'); return { filename: f, status: s === 'A' ? 'added' : s === 'D' ? 'removed' : 'modified' }; });
+}
+
+// what the record.yml workflow does, here: returns when the video (or the reason there is none) is on the videos branch
+async function filmIt(inp, run) {
+  const zlib = await import('node:zlib');
+  const rec = JSON.parse(zlib.inflateRawSync(Buffer.from(inp.recording, 'base64')).toString('utf8'));
+  run.recording = rec;
+  const src = path.join(WORK, 'film-' + inp.request); fs.mkdirSync(src);
+  execSync('git -C ' + JSON.stringify(FAC) + ' archive ' + inp.sha + ' | tar -x -C ' + JSON.stringify(src));
+  if (rec.finger && rec.finger.kind === 'hand') { rec.finger.file = path.join(src, 'marketing/hands', rec.finger.hand + '.png'); rec.finger.tip = JSON.parse(fs.readFileSync(path.join(src, 'marketing/hands', rec.finger.hand + '.json'))).tip; }
+  fs.writeFileSync(path.join(src, 'recording.json'), JSON.stringify(rec));
+  execFileSync(process.env.PYTHON || 'python3', [path.join(src, 'kit/build/build_game.py'), path.join(src, 'games', rec.game)], { stdio: 'pipe' });
+  const out = path.join(src, 'out');
+  let ok = true, error = '';
+  const { execFile } = await import('node:child_process');   // (in the background: the stand-in keeps answering Desk while it films)
+  await new Promise(done => execFile(process.execPath, [path.join(src, 'marketing/recorder/render.js'), path.join(src, 'recording.json'), path.join(src, 'games', rec.game, 'dist/app'), out],
+    { maxBuffer: 1 << 26, env: { ...process.env, NODE_PATH: execSync('npm root -g').toString().trim() } }, (e, so, se) => { if (e) { ok = false; error = String(se || e.message).trim().split('\n').pop(); } run.log = String(so); done(); }));
+  const info = Object.assign(ok ? JSON.parse(fs.readFileSync(path.join(out, 'video.json'))) : { game: rec.game }, { ok, request: inp.request, factory: inp.sha, run: 900 + recordRuns.indexOf(run), date: new Date().toISOString().slice(0, 16).replace('T', ' ') + ' UTC', by: 'owner-person' }, ok ? {} : { error });
+  run.info = info;
+  const files = { ['rec-' + inp.request + '/video.json']: Buffer.from(JSON.stringify(info)) };
+  if (ok) for (const f of ['video.mp4', 'poster.png']) files['rec-' + inp.request + '/' + f] = fs.readFileSync(path.join(out, f));
+  commitFiles(REL, 'videos', 'videos', files, 'Videos');
+  run.status = 'completed'; run.conclusion = ok ? 'success' : 'failure';
 }
 
 // ---------- the stand-in for api.github.com ----------
@@ -215,6 +239,17 @@ function api(who, method, url, body) {
   }
   if ((x = /^\/contents\/([a-z0-9]+)\.json$/.exec(rest)) && q.get('ref') === 'adjust-checks') {
     const r = adjustResults[x[1]]; return r ? [200, { content: Buffer.from(JSON.stringify(r)).toString('base64') }] : [404, { message: 'Not Found' }];
+  }
+  // Record a video (record.yml): the stand-in really films it, as the workflow does: the factory at that commit, the game
+  // built as the phone app has it, GameFactory marketing/recorder/render.js on the recording Desk sent (needs ffmpeg and
+  // Playwright here), and the result on the videos branch (rec-<request>/)
+  if (rest.startsWith('/actions/workflows/record.yml/runs')) return [200, { workflow_runs: recordRuns.slice().reverse() }];
+  if (rest === '/actions/workflows/record.yml/dispatches' && method === 'POST') {
+    recordDispatches.push(body);
+    const run = { status: 'in_progress', conclusion: null, display_title: 'Video · ' + body.inputs.game + ' · ' + body.inputs.request, html_url: 'https://github.com/' + REL_NAME + '/actions/runs/' + (900 + recordRuns.length), created_at: new Date().toISOString() };
+    recordRuns.push(run);
+    filmIt(body.inputs, run).catch(e => { run.status = 'completed'; run.conclusion = 'failure'; run.error = String(e.message || e); });
+    return [204, null];
   }
   if (rest.startsWith('/actions/secrets/public-key')) return [200, { key_id: 'key-1', key: Buffer.from(KEYS.publicKey).toString('base64') }];
   if (rest.startsWith('/actions/secrets') && method === 'GET') return [200, { total_count: secrets.size, secrets: [...secrets].map(([name, s]) => ({ name, updated_at: s.updated_at })) }];
@@ -623,6 +658,65 @@ try {
   ok('art submission with a conflict: says so, Approve is off', s11.includes('has a conflict with main') && await p.isDisabled('button:has-text("Approve and merge")'));
   ok('art submission: lists the other open proposal that changes the same picture, not itself', s11.includes('Another open art proposal changes the same pictures') && s11.includes('#' + (nextPr - 1)) && !/#11 "/.test(s11));
   await shot(p, 'art-conflict');
+
+  // =====================================================================
+  // Record: a level played here, filmed by the cloud (here: render.js for real), a hand proposed
+  // =====================================================================
+  await p.goto(ORIGIN + '/#record'); await until(p, 'New video', 60000);
+  const recGames = await p.$$eval('#rec-game option', o => o.map(x => x.value));
+  const recGame = recGames.includes('meowdog') ? 'meowdog' : recGames[0];
+  await p.selectOption('#rec-game', recGame); await p.fill('#rec-level', '2'); await p.selectOption('#rec-phone', '1080x2340');
+  const hasHand = await p.$('#rec-kind option[value="hand"]:not([disabled])');
+  await p.selectOption('#rec-kind', hasHand ? 'hand' : 'circle');
+  await p.click('#rec-open');
+  await p.waitForSelector('#rec-start:not([disabled])', { timeout: 120000 });
+  const rf = p.frameLocator('#rec-frame');
+  ok('record: the game is played at the phone\'s own size (360 x 780 for 1080 x 2340)', await p.$eval('#rec-frame', f => f.style.width === '360px' && f.style.height === '780px'));
+  await rf.locator('#dk-home .lvl-btn').first().waitFor({ timeout: 60000 });
+  ok('record: the chosen touches are drawn in the game', await rf.locator(hasHand ? 'body > div > img[src^="data:image/png"]' : 'body > div > div[style*="border-radius: 50%"]').count() === 1);
+  await p.click('#rec-start'); await p.waitForSelector('#rec-stop', { timeout: 10000 });
+  await p.waitForTimeout(600);
+  await rf.locator('#dk-home .lvl-btn').first().click();
+  await p.waitForTimeout(1500);
+  for (const [x, y] of [[0.3, 0.45], [0.6, 0.55]]) { const b = await rf.locator('#dk-game').first().boundingBox(); if (b) { await p.mouse.move(b.x + b.width * x, b.y + b.height * y, { steps: 8 }); await p.mouse.down(); await p.waitForTimeout(80); await p.mouse.up(); await p.waitForTimeout(700); } }
+  await p.click('#rec-stop'); await p.waitForSelector('#rec-filmed', { timeout: 10000 });
+  ok('record: says how long the filmed part is', /Filmed \d+\.\d s/.test(await p.innerText('#rec-filmed')), await p.innerText('#rec-filmed'));
+  await shot(p, 'record');
+  await p.click('#rec-make'); await until(p, 'Sent.', 20000);
+  const rd = recordDispatches[0], rr = recordRuns[0] && recordRuns[0].recording;
+  ok('record: the recording is sent with the game, its commit and a request name', !!rd && rd.inputs.game === recGame && /^[0-9a-f]{40}$/.test(rd.inputs.sha) && rd.inputs.sha === refOf(FAC, 'main') && rd.inputs.request.startsWith(recGame + '-'));
+  ok('record: it holds the size, level, touches and the filmed part', !!rr && rr.size === '1080x2340' && rr.level === 2 && rr.finger.kind === (hasHand ? 'hand' : 'circle') && rr.log.some(e => e[1] === 's') && rr.log.some(e => e[1] === 'e') && rr.log.filter(e => e[1] === 'd').length >= 3, rr && JSON.stringify({ size: rr.size, level: rr.level, finger: rr.finger, n: rr.log.length }));
+  ok('record: no tap or picture is sent as a secret: the recording has no data: pictures', !!rd && !Buffer.from(rd.inputs.recording, 'base64').includes('data:image'));
+  const ready = await p.waitForSelector('#rec-videos .chip:has-text("Ready"), #rec-videos .chip:has-text("No video")', { timeout: 600000 }).then(e => e.innerText(), () => 'nothing');
+  const ri = recordRuns[0] && recordRuns[0].info;
+  ok('record: the cloud\'s replay matched the game played here at every check, and made the video', ready === 'Ready' && ri && ri.ok && ri.checks > 0 && ri.frames > 60, ri ? JSON.stringify(ri).slice(0, 300) : recordRuns[0] && recordRuns[0].error);
+  if (ri && ri.ok) {
+    const mp4 = fileAt(REL, 'videos', 'rec-' + rd.inputs.request + '/video.mp4');
+    const mp4f = path.join(WORK, 'video.mp4'); fs.writeFileSync(mp4f, mp4 || Buffer.alloc(0));
+    const probe = (() => { try { return execFileSync('ffprobe', ['-v', 'error', '-show_entries', 'stream=codec_name,width,height', '-of', 'csv=p=0', mp4f]).toString().trim().split('\n').map(l => l.replace(/,+$/, '')); } catch (e) { return [String(e.message).slice(0, 200)]; } })();
+    ok('record: the video is 1080 x 2340, H.264, with sound', probe.includes('h264,1080,2340') && probe.some(l => l.startsWith('aac')), probe.join(' / '));
+    ok('record: the video can be downloaded and watched here', await p.isVisible('#rec-videos button:has-text("Download .mp4")') && await p.isVisible('#rec-videos button:has-text("Watch")'));
+    await p.click('#rec-videos button:has-text("Watch")'); 
+    ok('record: Watch plays it in the page', await p.waitForSelector('#rec-videos video', { timeout: 30000 }).then(() => true, () => false));
+  }
+  // a hand, proposed for approval
+  const handPng = fileAt(FAC, 'main', 'marketing/hands/point.png');
+  await p.setInputFiles('#hand-file', { name: 'my-hand.png', mimeType: 'image/png', buffer: handPng });
+  await p.waitForSelector('.hand-pick img', { timeout: 10000 });
+  await p.fill('#hand-name', 'Test hand');
+  await p.locator('.hand-pick img').scrollIntoViewIfNeeded();
+  const hb = await p.locator('.hand-pick img').boundingBox(); await p.mouse.click(hb.x + hb.width * 0.4, hb.y + hb.height * 0.05);
+  await p.click('#hand-propose'); await until(p, 'Proposed:', 20000);
+  const handPr = calls.filter(c => c.method === 'POST' && c.path === '/pulls').map(c => c.body).find(b => b.head.startsWith('hand/'));
+  const hbr = handPr && refOf(FAC, handPr.head), hch = hbr ? gitS(FAC, 'diff', '--name-only', 'main', hbr).split('\n') : [];
+  const hj = hbr ? JSON.parse(fileAt(FAC, hbr, 'marketing/hands/test-hand.json') || '{}') : {};
+  ok('hands: proposed as its own branch and pull request, titled', !!hbr && handPr.title === 'Hand: Test hand');
+  ok('hands: only the picture and its fingertip file', hch.length === 2 && hch.includes('marketing/hands/test-hand.png') && hch.includes('marketing/hands/test-hand.json'), hch.join(', '));
+  ok('hands: the fingertip is where it was clicked', hj.name === 'Test hand' && Math.abs(hj.tip[0] - 0.4) < 0.03 && Math.abs(hj.tip[1] - 0.05) < 0.03, JSON.stringify(hj));
+  const hpn = handPr ? pulls.find(x => x.ref === handPr.head).number : 0;
+  await p.goto(ORIGIN + '/#submission/' + hpn); await until(p, 'Hand for videos');
+  ok('hands: the submission shows the hand with its fingertip', await p.waitForSelector('figure.hand .hand-tip', { timeout: 15000 }).then(() => true, () => false));
+  await shot(p, 'hand-submission');
 
   // =====================================================================
   // remember me, sign out, an expired token
