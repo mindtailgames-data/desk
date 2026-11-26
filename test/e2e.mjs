@@ -731,7 +731,7 @@ try {
   const plGame = plGames.includes('meowdog') ? 'meowdog' : plGames[0];
   await p.selectOption('#pl-game', plGame);
   await p.waitForSelector('#pl-level', { timeout: 90000 });
-  await p.fill('#pl-level', '3'); await p.dispatchEvent('#pl-level', 'change');
+  await p.fill('#pl-level', '2'); await p.dispatchEvent('#pl-level', 'change');   // (level 2: it has a card to read in the game, never in a playable)
   await p.fill('#pl-clicks', '4'); await p.dispatchEvent('#pl-clicks', 'input');
   await p.uncheck('#pl-topbar');
   const plf = p.frameLocator('#pl-frame');
@@ -739,6 +739,7 @@ try {
   await plf.locator('#dk-game').first().waitFor({ timeout: 60000 });
   await p.waitForTimeout(1500);
   ok('playable: the preview plays the level at once, top bar hidden', await plf.locator('#dk-hud .lvl').first().isHidden() && await plf.locator('html.pk-on').count() === 1);
+  ok('playable: no tutorial card to read (only the hand steps, when the game gives them)', await plf.locator('#dk-pops .dk-panel').count() === 0 && await p.isChecked('#pl-tutorial'));
   ok('playable: the file name is the default, from the game\'s initials', /^[A-Z]{2,4}_Playable_PureGP_9x16_EN$/.test(await p.inputValue('#pl-name')), await p.inputValue('#pl-name'));
   await p.locator('#pl-frame').scrollIntoViewIfNeeded(); await p.waitForTimeout(300);
   const fb = await p.locator('#pl-frame').boundingBox();
@@ -751,6 +752,7 @@ try {
   const dlPath = path.join(WORK, pdl.suggestedFilename()); await pdl.saveAs(dlPath);
   const plHtml = fs.readFileSync(dlPath, 'utf8');
   ok('playable: saved as <name>.html', /^[A-Z]{2,4}_Playable_PureGP_9x16_EN\.html$/.test(pdl.suggestedFilename()), pdl.suggestedFilename());
+  ok('playable: the How to play choice is in the file', plHtml.includes('"tutorial":true'));
   ok('playable: one file, nothing from outside, the store through mraid.open', !/(src|href)\s*=\s*["']https?:/i.test(plHtml) && plHtml.includes('mraid.open(') && !plHtml.includes('mraid.js'));
   ok('playable: the report says its size and that it is complete', /MB/.test(await p.innerText('#pl-out')) && /Nothing is loaded from outside/.test(await p.innerText('#pl-out')));
   // the saved file in a phone-sized page, as the network shows it (AppLovin's MRAID stood in for)
