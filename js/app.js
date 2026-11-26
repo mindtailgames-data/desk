@@ -1430,7 +1430,7 @@ async function playableEditor(body, id, info, sha, rel, current) {
   const B = plBuilt, cfg = B.built.cfg, langs = Array.isArray(cfg.languages) && cfg.languages.length ? cfg.languages : ['en'];
   const levels = (info && info.levels) || 50, boosters = (cfg.boosters || []).length;   // (the game's own levels, not the repeats after them)
   const r = (rel || []).filter(x => x.game === id && x.package).slice(-1)[0];
-  const P = Object.assign({ level: 1, lang: langs[0], size: '9x16', tutorial: true, topBar: true, boost: true, boostN: 3, clicksOn: true, clicks: 25, secondsOn: false, seconds: 50,
+  const P = Object.assign({ level: 1, lang: langs[0], size: '9x16', tutorial: true, howto: false, topBar: true, boost: true, boostN: 3, clicksOn: true, clicks: 25, secondsOn: false, seconds: 50,
     pkg: r ? r.package : 'com.duste.' + id, initials: initialsOf(cfg.title), endBg: 'image', endColor: '#1F62DD', endOpacity: 60, outside: '#0E0B26', texts: {} }, plPrefs(id));
   const txt = () => Object.assign({}, PL_TEXTS[P.lang] || PL_TEXTS.en, P.texts[P.lang] || {});
   const save = () => savePlPrefs(id, P);
@@ -1440,6 +1440,7 @@ async function playableEditor(body, id, info, sha, rel, current) {
   const lang = el('select', { id: 'pl-lang' }, ...langs.map(l => el('option', { value: l, text: ({ en: 'English', tr: 'Türkçe' })[l] || l }))); lang.value = langs.includes(P.lang) ? P.lang : langs[0];
   const size = el('select', { id: 'pl-size' }, ...SIZES.map(s => el('option', { value: s.id, text: s.label }))); size.value = P.size;
   const tutorial = inp('tutorial', { type: 'checkbox' }); tutorial.checked = P.tutorial !== false;
+  const howto = inp('howto', { type: 'checkbox' }); howto.checked = !!P.howto;
   const topBar = inp('topbar', { type: 'checkbox' }); topBar.checked = P.topBar;
   const boost = inp('boost', { type: 'checkbox', disabled: !boosters }); boost.checked = P.boost && !!boosters;
   const boostN = inp('boostn', { type: 'number', min: '0', max: '9', value: String(P.boostN) });
@@ -1472,7 +1473,7 @@ async function playableEditor(body, id, info, sha, rel, current) {
   const fit = () => { const [w, h] = landscape ? [PHONE[1], PHONE[0]] : PHONE; frame.style.width = w + 'px'; frame.style.height = h + 'px'; box.style.width = w + 'px'; box.style.height = h + 'px'; turn.textContent = landscape ? 'Turn to portrait' : 'Turn to landscape'; };
   const settings = preview => {
     const t = { success: success.value.trim() || txt().success, fail: failT.value.trim() || txt().fail, play: play.value.trim() || txt().play };
-    return { aspect: SIZES.find(s => s.id === size.value).aspect, outside: outside.value, tutorial: tutorial.checked, topBar: topBar.checked, boosters: { show: boost.checked, count: Math.max(0, Math.min(9, parseInt(boostN.value, 10) || 0)) },
+    return { aspect: SIZES.find(s => s.id === size.value).aspect, outside: outside.value, tutorial: tutorial.checked, howto: howto.checked, topBar: topBar.checked, boosters: { show: boost.checked, count: Math.max(0, Math.min(9, parseInt(boostN.value, 10) || 0)) },
       clicks: clicksOn.checked ? Math.max(1, Math.min(100, parseInt(clicks.value, 10) || 25)) : 0, seconds: secondsOn.checked ? Math.max(1, Math.min(100, parseInt(seconds.value, 10) || 50)) : 0,
       store: storeUrl(pkg.value.trim()), badges: { success: t.success, fail: t.fail },
       end: { bg: endBg.value, color: endColor.value, opacity: (parseInt(endOpacity.value, 10) || 0) / 100, play: t.play, icon: B.icon, iconBg: B.iconBg, iconColor: B.iconColor }, preview: !!preview };
@@ -1493,6 +1494,7 @@ async function playableEditor(body, id, info, sha, rel, current) {
     else if (d.pk === 'store') { opens.push(d.reason); logUp(); events.prepend(el('div', { text: '→ the store opens (' + ({ clicks: 'after ' + clicks.value + ' taps', time: seconds.value + ' s after the first tap', endcard: 'Play on the end card' }[d.reason] || 'a tap after the store opened once') + ')' })); }
     else if (d.pk === 'ended') events.prepend(el('div', { text: d.kind === 'win' ? 'Level won: Success badge, then the end card' : 'Level failed: Fail badge, then the end card' }));
     else if (d.pk === 'endcard') events.prepend(el('div', { text: 'End card shown' }));
+    else if (d.pk === 'lesson') lessonNote(d);
   };
   // ----- export
   const out = el('div', { class: 'stack', id: 'pl-out' }), exp = el('button', { type: 'button', id: 'pl-export', text: 'Save the file' });
@@ -1520,7 +1522,9 @@ async function playableEditor(body, id, info, sha, rel, current) {
       el('section', { class: 'card' }, el('h2', { text: 'Level' }), el('div', { class: 'form' },
         el('label', {}, 'Level (1-' + levels + ')', level), langs.length > 1 ? el('label', {}, 'Language', lang) : null, el('label', {}, 'Size', size),
         el('label', {}, 'Color around the game', outside)),
-        el('label', { class: 'check' }, tutorial, ' How to play: the hand shows level 1\'s first moves, on this level'),
+        el('label', { class: 'check' }, tutorial, ' Tutorial: level 1\'s lesson (its hand steps and texts), on this level'),
+        el('label', { class: 'check' }, howto, ' Then level 1\'s How to play card (if it has one)'),
+        el('p', { class: 'small muted', id: 'pl-lesson' }),
         el('label', { class: 'check' }, topBar, ' Top bar (the level and the settings button)'),
         boosters ? el('label', { class: 'check' }, boost, ' Boosters, ', boostN, ' of each') : el('p', { class: 'small muted', text: 'This game has no boosters.' })),
       el('section', { class: 'card' }, el('h2', { text: 'Store' }), el('div', { class: 'form' }, el('label', {}, 'Store package', pkg)),
@@ -1536,16 +1540,26 @@ async function playableEditor(body, id, info, sha, rel, current) {
         row(exp), out)),
     el('section', { class: 'card pl-side' }, el('h2', { text: 'Preview' }), el('p', { class: 'small muted', text: 'The file itself, on a phone. Taps, the store and the end card are reported below.' }),
       box, row(turn, restart), counters, events)));
+  // what the tutorial did on this level (the kit reports it): level 1's lesson fits, after the game prepared it, or not
+  const lessonNote = d => {
+    const t = $('#pl-lesson'); if (!t) return;
+    if (!tutorial.checked || !d.want) { t.textContent = ''; return; }
+    if (d.fit < 0) { t.textContent = 'Level 1\'s lesson can\'t be given on this level (the game finds no way to fit it): choose another level for the tutorial.'; t.className = 'small warn-text'; return; }
+    const prep = d.fit > 0 ? ' The game made ' + d.fit + ' correct move(s) first, so the lesson fits.' : '';
+    if (!d.done) { t.textContent = 'Level 1\'s lesson: ' + d.want + ' hand step(s).' + prep; t.className = 'small muted'; return; }
+    t.textContent = d.shown >= d.want ? 'Level 1\'s lesson: all ' + d.want + ' hand step(s) shown.' + prep : 'Only ' + d.shown + ' of level 1\'s ' + d.want + ' hand steps came: this game doesn\'t give its lesson on other levels yet (its chat must update it; the checker\'s T5 says what is missing).';
+    t.className = d.shown >= d.want ? 'small muted' : 'small warn-text';
+  };
   const urlNote = () => { $('#pl-url').textContent = storeUrl(pkg.value.trim()); };
   urlNote(); opOut.textContent = endOpacity.value + '%'; fit();
   const changed = () => {
-    Object.assign(P, { level: lvl(), lang: lang.value, size: size.value, tutorial: tutorial.checked, topBar: topBar.checked, boost: boost.checked, boostN: parseInt(boostN.value, 10) || 0, clicksOn: clicksOn.checked, clicks: parseInt(clicks.value, 10) || 25,
+    Object.assign(P, { level: lvl(), lang: lang.value, size: size.value, tutorial: tutorial.checked, howto: howto.checked, topBar: topBar.checked, boost: boost.checked, boostN: parseInt(boostN.value, 10) || 0, clicksOn: clicksOn.checked, clicks: parseInt(clicks.value, 10) || 25,
       secondsOn: secondsOn.checked, seconds: parseInt(seconds.value, 10) || 50, pkg: pkg.value.trim(), initials: initials.value.trim(), endBg: endBg.value, endColor: endColor.value, endOpacity: parseInt(endOpacity.value, 10) || 0, outside: outside.value });
     P.texts[P.lang] = { success: success.value, fail: failT.value, play: play.value };
     if (!nameTouched) name.value = defName();
     urlNote(); opOut.textContent = endOpacity.value + '%'; save(); show();
   };
-  for (const c of [level, size, tutorial, topBar, boost, boostN, clicksOn, clicks, secondsOn, seconds, pkg, success, failT, play, endBg, endColor, endOpacity, outside, initials]) c.addEventListener(c.type === 'text' || c.type === 'range' || c.type === 'color' ? 'input' : 'change', changed);
+  for (const c of [level, size, tutorial, howto, topBar, boost, boostN, clicksOn, clicks, secondsOn, seconds, pkg, success, failT, play, endBg, endColor, endOpacity, outside, initials]) c.addEventListener(c.type === 'text' || c.type === 'range' || c.type === 'color' ? 'input' : 'change', changed);
   lang.addEventListener('change', () => { P.lang = lang.value; fillTexts(); changed(); });
   turn.addEventListener('click', () => { landscape = !landscape; fit(); });
   restart.addEventListener('click', show);

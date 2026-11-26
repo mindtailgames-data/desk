@@ -726,7 +726,7 @@ try {
   // =====================================================================
   // Playable: a level as a playable ad, previewed (the file itself) and saved as AppLovin's file
   // =====================================================================
-  await p.goto(ORIGIN + '/#playable'); await until(p, 'Playable', 30000);
+  await p.goto(ORIGIN + '/#playable'); await p.waitForSelector('#pl-game option', { state: 'attached', timeout: 60000 });   // (the game list, filled once the games are read: the word "Playable" is in the menu from the start)
   const plGames = await p.$$eval('#pl-game option', o => o.map(x => x.value));
   const plGame = plGames.includes('meowdog') ? 'meowdog' : plGames[0];
   await p.selectOption('#pl-game', plGame);
@@ -739,7 +739,8 @@ try {
   await plf.locator('#dk-game').first().waitFor({ timeout: 60000 });
   await p.waitForTimeout(1500);
   ok('playable: the preview plays the level at once, top bar hidden', await plf.locator('#dk-hud .lvl').first().isHidden() && await plf.locator('html.pk-on').count() === 1);
-  ok('playable: no tutorial card to read (only the hand steps, when the game gives them)', await plf.locator('#dk-pops .dk-panel').count() === 0 && await p.isChecked('#pl-tutorial'));
+  ok('playable: no tutorial card to read (only the hand steps, when the game gives them)', await plf.locator('#dk-pops .dk-panel').count() === 0 && await p.isChecked('#pl-tutorial') && !(await p.isChecked('#pl-howto')));
+  ok('playable: Desk says what the lesson did on this level', /lesson/i.test(await p.innerText('#pl-lesson')), await p.innerText('#pl-lesson'));
   ok('playable: the file name is the default, from the game\'s initials', /^[A-Z]{2,4}_Playable_PureGP_9x16_EN$/.test(await p.inputValue('#pl-name')), await p.inputValue('#pl-name'));
   await p.locator('#pl-frame').scrollIntoViewIfNeeded(); await p.waitForTimeout(300);
   const fb = await p.locator('#pl-frame').boundingBox();
