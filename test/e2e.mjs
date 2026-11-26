@@ -754,6 +754,7 @@ try {
   const plHtml = fs.readFileSync(dlPath, 'utf8');
   ok('playable: saved as <name>.html', /^[A-Z]{2,4}_Playable_PureGP_9x16_EN\.html$/.test(pdl.suggestedFilename()), pdl.suggestedFilename());
   ok('playable: the How to play choice is in the file', plHtml.includes('"tutorial":true'));
+  ok('playable: losing is on by default, in the file', await p.isChecked('#pl-canlose') && plHtml.includes('"canLose":true'));
   ok('playable: one file, nothing from outside, the store through mraid.open', !/(src|href)\s*=\s*["']https?:/i.test(plHtml) && plHtml.includes('mraid.open(') && !plHtml.includes('mraid.js'));
   ok('playable: the report says its size and that it is complete', /MB/.test(await p.innerText('#pl-out')) && /Nothing is loaded from outside/.test(await p.innerText('#pl-out')));
   // the saved file in a phone-sized page, as the network shows it (AppLovin's MRAID stood in for)
