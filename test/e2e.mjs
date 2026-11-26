@@ -724,6 +724,45 @@ try {
   await shot(p, 'hand-submission');
 
   // =====================================================================
+  // Playable: a level as a playable ad, previewed (the file itself) and saved as AppLovin's file
+  // =====================================================================
+  await p.goto(ORIGIN + '/#playable'); await until(p, 'Playable', 30000);
+  const plGames = await p.$$eval('#pl-game option', o => o.map(x => x.value));
+  const plGame = plGames.includes('meowdog') ? 'meowdog' : plGames[0];
+  await p.selectOption('#pl-game', plGame);
+  await p.waitForSelector('#pl-level', { timeout: 90000 });
+  await p.fill('#pl-level', '3'); await p.dispatchEvent('#pl-level', 'change');
+  await p.fill('#pl-clicks', '4'); await p.dispatchEvent('#pl-clicks', 'input');
+  await p.uncheck('#pl-topbar');
+  const plf = p.frameLocator('#pl-frame');
+  await p.waitForTimeout(600);
+  await plf.locator('#dk-game').first().waitFor({ timeout: 60000 });
+  await p.waitForTimeout(1500);
+  ok('playable: the preview plays the level at once, top bar hidden', await plf.locator('#dk-hud .lvl').first().isHidden() && await plf.locator('html.pk-on').count() === 1);
+  ok('playable: the file name is the default, from the game\'s initials', /^[A-Z]{2,4}_Playable_PureGP_9x16_EN$/.test(await p.inputValue('#pl-name')), await p.inputValue('#pl-name'));
+  await p.locator('#pl-frame').scrollIntoViewIfNeeded(); await p.waitForTimeout(300);
+  const fb = await p.locator('#pl-frame').boundingBox();
+  for (let k = 0; k < 4; k++) { await p.mouse.click(fb.x + fb.width / 2, fb.y + 20); await p.waitForTimeout(250); }   // (the band above the game's stage: a tap that changes nothing in the level)
+  ok('playable: the preview counts the taps and says the store opened at the 4th', /Taps: 4/.test(await p.innerText('#pl-count')) && /after 4 taps/.test(await p.innerText('#pl-log')), (await p.innerText('#pl-count')) + ' / ' + (await p.innerText('#pl-log')));
+  await p.waitForTimeout(800);
+  ok('playable: the end card comes after the last chosen trigger', await plf.locator('.pk-end .pk-play').count() === 1);
+  await shot(p, 'playable');
+  const [pdl] = await Promise.all([p.waitForEvent('download'), p.click('#pl-export')]);
+  const dlPath = path.join(WORK, pdl.suggestedFilename()); await pdl.saveAs(dlPath);
+  const plHtml = fs.readFileSync(dlPath, 'utf8');
+  ok('playable: saved as <name>.html', /^[A-Z]{2,4}_Playable_PureGP_9x16_EN\.html$/.test(pdl.suggestedFilename()), pdl.suggestedFilename());
+  ok('playable: one file, nothing from outside, the store through mraid.open', !/(src|href)\s*=\s*["']https?:/i.test(plHtml) && plHtml.includes('mraid.open(') && !plHtml.includes('mraid.js'));
+  ok('playable: the report says its size and that it is complete', /MB/.test(await p.innerText('#pl-out')) && /Nothing is loaded from outside/.test(await p.innerText('#pl-out')));
+  // the saved file in a phone-sized page, as the network shows it (AppLovin's MRAID stood in for)
+  const adp = await browser.newPage({ viewport: { width: 390, height: 844 } });
+  await adp.addInitScript(() => { window.__opens = []; window.mraid = { getState: () => 'default', addEventListener() {}, isViewable: () => true, open: u => window.__opens.push(u) }; });
+  await adp.goto('file://' + dlPath); await adp.waitForFunction(() => document.documentElement.classList.contains('pk-ready'), null, { timeout: 30000 });
+  for (let k = 0; k < 4; k++) { await adp.mouse.click(195, 830); await adp.waitForTimeout(200); }
+  const opened = await adp.evaluate(() => window.__opens);
+  ok('playable: the saved file opens the store (mraid.open) with the game\'s store link after 4 taps', opened.length === 1 && /^https:\/\/play\.google\.com\/store\/apps\/details\?id=[a-z0-9_.]+$/.test(opened[0]), JSON.stringify(opened));
+  await adp.close();
+
+  // =====================================================================
   // remember me, sign out, an expired token
   // =====================================================================
   await p.click('#logout'); await p.waitForSelector('#token', { timeout: 10000 }).catch(() => {});

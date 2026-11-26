@@ -228,6 +228,12 @@ export async function gameFiles(game) {
   await walk('', true);
   return out.sort();
 }
+// the same picture files as { path: data URI } (Desk's playables: only the ones a level uses)
+export async function filesMap(game, paths) {
+  const m = {};
+  for (const p of paths) m[p] = 'data:' + (MIME[p.split('.').pop().toLowerCase()] || 'application/octet-stream') + ';base64,' + base64(await game.bytes(p));
+  return m;
+}
 export async function filesScript(game, paths) {
   const m = {};
   for (const p of paths) m[p] = 'data:' + (MIME[p.split('.').pop().toLowerCase()] || 'application/octet-stream') + ';base64,' + base64(await game.bytes(p));

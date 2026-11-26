@@ -193,3 +193,12 @@ table.texts select { width: auto; min-width: 110px; }
 .hand-pick { max-width: 220px; cursor: crosshair; display: grid; gap: 6px; }
 .hand-pick[hidden] { display: none; }
 @media (max-width: 760px) { .rec-stage { grid-template-columns: 1fr; } }
+/* Playable: the settings beside the preview (the file itself, on a phone) */
+.pl-grid { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 18px; align-items: start; }
+.pl-side { position: sticky; top: 70px; display: grid; gap: 10px; justify-items: start; }
+.pl-phone { border-radius: 18px; outline: 6px solid #000; background: #000; overflow: hidden; margin: 6px; }
+.pl-phone iframe { border: 0; display: block; }
+.pl-log { max-height: 160px; overflow: auto; display: grid; gap: 2px; color: var(--muted); }
+label.check { display: flex; flex-direction: row; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 8px; font-weight: 500; color: var(--ink); }
+label.check input[type=number] { width: 64px; }
+@media (max-width: 900px) { .pl-grid { grid-template-columns: 1fr; } .pl-side { position: static; } }

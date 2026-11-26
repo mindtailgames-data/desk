@@ -2,7 +2,8 @@
 // token; nothing is stored anywhere but in this browser's memory (and the token in this browser, if asked to).
 import { sealForGitHub } from './seal.js';
 import { client, session, GitHubError, bytesToB64 } from './gh.js';
-import { buildGame, settingsOf, settingsErrors, MILESTONE_LEVELS, filesScript } from './builder.js';
+import { buildGame, settingsOf, settingsErrors, MILESTONE_LEVELS, filesScript, gameFiles, filesMap } from './builder.js';
+import { NETWORKS, SIZES, initialsOf, defaultName, storeUrl, playableHtml, report } from './playable.js';
 import { render as renderMd, esc } from './md.js';
 import { prepare } from './art.js';
 
@@ -1376,8 +1377,181 @@ function handsCard(hands) {
     el('h3', { text: 'Add a hand' }), el('div', { class: 'form' }, el('label', {}, 'Picture', file), el('label', {}, 'Name', name)), preview, el('div', { class: 'row' }, propose), status);
 }
 
+// ---------- Playable: one level of a game as a playable ad (js/playable.js; the kit's playable mode) ----------
+// Everything happens in this browser: the game is built from GitHub (main), made a playable with the settings here, shown
+// in the preview exactly as the file (only the store is not opened: the preview says so) and saved as the network's file.
+// The settings are remembered per game on this computer.
+const PL_KEY = id => 'desk.playable.' + id;
+const plPrefs = id => { try { return JSON.parse(localStorage.getItem(PL_KEY(id)) || '{}') || {}; } catch (e) { return {}; } };
+const savePlPrefs = (id, p) => { try { localStorage.setItem(PL_KEY(id), JSON.stringify(p)); } catch (e) {} };
+const PL_TEXTS = { en: { success: 'Success', fail: 'Fail', play: 'Play' }, tr: { success: 'Başarılı', fail: 'Başarısız', play: 'Oyna' } };
+const ALL_FILES_MAX = 1.5 * 1048576;   // a game's picture files up to this size all go into the file; above it, only the ones its level uses
+let plBuilt = null;   // { key: sha + id, built, game reader, files, icon }
+async function playableView() {
+  const view = cur;
+  page(view, 'Playable', 'One level of a game as a playable ad, in the file the ad network expects. Choose the game and its level, set it up, try it in the preview (it is the file itself), and save the file.');
+  loading(view);
+  try {
+    const sha = await mainSha();
+    const [list, rel] = await Promise.all([games(sha), releases()]);
+    view.lastChild.remove();
+    const last = (() => { try { return localStorage.getItem('desk.playable.game'); } catch (e) { return null; } })();
+    const game = el('select', { id: 'pl-game' }, ...list.filter(g => !g.error).map(g => el('option', { value: g.id, text: (g.title || g.id) + ' (' + g.id + ')' })));
+    if (list.some(g => g.id === last)) game.value = last;
+    const body = el('div', { class: 'pl-wrap' });
+    view.append(el('section', { class: 'card' }, el('div', { class: 'form' }, el('label', {}, 'Game', game)), el('p', { class: 'small muted', text: 'The latest approved version (main). Its settings here are remembered on this computer.' })), body);
+    let loading_ = 0;   // (only the latest choice draws: a game still building when another is chosen is dropped)
+    const load = async () => {
+      const mine = ++loading_;
+      try { localStorage.setItem('desk.playable.game', game.value); } catch (e) {}
+      body.replaceChildren(el('p', { class: 'muted', text: 'Building ' + game.value + ' from GitHub…' }));
+      try { await playableEditor(body, game.value, list.find(g => g.id === game.value), sha, rel, () => mine === loading_ && body.isConnected); }
+      catch (e) { if (mine === loading_) body.replaceChildren(note('bad', e.message)); }
+    };
+    game.addEventListener('change', load); load();
+  } catch (e) { fail(view, e); }
+}
+async function playableEditor(body, id, info, sha, rel, current) {
+  const key = sha + ':' + id;
+  if (!plBuilt || plBuilt.key !== key) {
+    const [kit, g, all] = await Promise.all([S.gh.reader(S.factory, sha, 'kit'), S.gh.reader(S.factory, sha, 'games/' + id), S.gh.reader(S.factory, sha, '')]);
+    const built = await buildGame(kit, g, { bots: true });
+    const module = await kit.text('modules/playable.js');
+    const paths = await gameFiles(g);
+    let size = 0; for (const p of paths) { const e = g.entry(p); size += e && e.size ? e.size : 0; }
+    const uri = async (rd, p) => 'data:' + (p.endsWith('.png') ? 'image/png' : 'image/webp') + ';base64,' + bytesToB64(await rd.bytes(p));
+    const ig = await g.list('');
+    const icon = ig.includes('icon-foreground.png') ? await uri(g, 'icon-foreground.png') : (all.has('kit/art/app-icon-foreground.png') ? await uri(kit, 'art/app-icon-foreground.png') : null);
+    const ibName = ['icon-background.webp', 'icon-background.png'].find(f => ig.includes(f));
+    if (!current()) return;   // (another game was chosen meanwhile)
+    plBuilt = { key, built, g, module, paths, size, icon, iconBg: ibName ? await uri(g, ibName) : null, iconColor: built.cfg.iconBackground || (built.cfg.theme && built.cfg.theme.bg1) || '#1F62DD', used: new Set(), fileCache: null };
+  }
+  if (!current()) return;
+  const B = plBuilt, cfg = B.built.cfg, langs = Array.isArray(cfg.languages) && cfg.languages.length ? cfg.languages : ['en'];
+  const levels = (info && info.levels) || 50, boosters = (cfg.boosters || []).length;   // (the game's own levels, not the repeats after them)
+  const r = (rel || []).filter(x => x.game === id && x.package).slice(-1)[0];
+  const P = Object.assign({ level: 1, lang: langs[0], size: '9x16', topBar: true, boost: true, boostN: 3, clicksOn: true, clicks: 25, secondsOn: false, seconds: 50,
+    pkg: r ? r.package : 'com.duste.' + id, initials: initialsOf(cfg.title), endBg: 'image', endColor: '#1F62DD', endOpacity: 60, outside: '#0E0B26', texts: {} }, plPrefs(id));
+  const txt = () => Object.assign({}, PL_TEXTS[P.lang] || PL_TEXTS.en, P.texts[P.lang] || {});
+  const save = () => savePlPrefs(id, P);
+  // ----- the controls
+  const inp = (k, props) => { const i = el('input', Object.assign({ id: 'pl-' + k }, props)); return i; };
+  const level = inp('level', { type: 'number', min: '1', max: String(levels), value: String(Math.min(levels, P.level)) });
+  const lang = el('select', { id: 'pl-lang' }, ...langs.map(l => el('option', { value: l, text: ({ en: 'English', tr: 'Türkçe' })[l] || l }))); lang.value = langs.includes(P.lang) ? P.lang : langs[0];
+  const size = el('select', { id: 'pl-size' }, ...SIZES.map(s => el('option', { value: s.id, text: s.label }))); size.value = P.size;
+  const topBar = inp('topbar', { type: 'checkbox' }); topBar.checked = P.topBar;
+  const boost = inp('boost', { type: 'checkbox', disabled: !boosters }); boost.checked = P.boost && !!boosters;
+  const boostN = inp('boostn', { type: 'number', min: '0', max: '9', value: String(P.boostN) });
+  const clicksOn = inp('clickson', { type: 'checkbox' }); clicksOn.checked = P.clicksOn;
+  const clicks = inp('clicks', { type: 'number', min: '1', max: '100', value: String(P.clicks) });
+  const secondsOn = inp('secondson', { type: 'checkbox' }); secondsOn.checked = P.secondsOn;
+  const seconds = inp('seconds', { type: 'number', min: '1', max: '100', value: String(P.seconds) });
+  const pkg = inp('pkg', { type: 'text', value: P.pkg, spellcheck: 'false' });
+  const success = inp('success', { type: 'text', maxlength: '24' }), failT = inp('fail', { type: 'text', maxlength: '24' }), play = inp('play', { type: 'text', maxlength: '20' });
+  const endBg = el('select', { id: 'pl-endbg' }, el('option', { value: 'image', text: 'The game\'s home background' }), el('option', { value: 'color', text: 'A color' })); endBg.value = P.endBg;
+  const endColor = inp('endcolor', { type: 'color', value: P.endColor }), endOpacity = inp('endopacity', { type: 'range', min: '0', max: '100', value: String(P.endOpacity) }), opOut = el('span', { class: 'small muted' });
+  const outside = inp('outside', { type: 'color', value: P.outside });
+  const initials = inp('initials', { type: 'text', maxlength: '6', value: P.initials });
+  const name = inp('name', { type: 'text', spellcheck: 'false' });
+  const network = el('select', { id: 'pl-network' }, ...Object.entries(NETWORKS).map(([k, n]) => el('option', { value: k, text: n.name })));
+  const lvl = () => Math.max(1, Math.min(levels, parseInt(level.value, 10) || 1));
+  const fillTexts = () => { const t = txt(); success.value = t.success; failT.value = t.fail; play.value = t.play; };
+  fillTexts();
+  let nameTouched = !!P.nameFor && P.nameFor === [P.initials, P.size, P.lang].join('|') && !!P.name;
+  const defName = () => defaultName(initials.value.trim() || initialsOf(cfg.title), size.value, lang.value);
+  name.value = nameTouched ? P.name : defName();
+  name.addEventListener('input', () => { nameTouched = name.value.trim() !== '' && name.value !== defName(); });
+  // ----- the preview: the file itself (only the store is reported here instead of opened)
+  const frame = el('iframe', { id: 'pl-frame', title: 'Playable', sandbox: 'allow-scripts' });
+  const box = el('div', { class: 'pl-phone' }, frame), turn = el('button', { type: 'button', class: 'ghost', id: 'pl-turn', text: 'Turn to landscape' });
+  const restart = el('button', { type: 'button', class: 'ghost', id: 'pl-restart', text: 'Start again' });
+  const events = el('div', { class: 'pl-log small', id: 'pl-log' }), counters = el('div', { class: 'small', id: 'pl-count' });
+  let landscape = false, presses = 0, opens = [];
+  const PHONE = [360, 760];   // (a phone's screen in the preview: a common 9:19 one)
+  const fit = () => { const [w, h] = landscape ? [PHONE[1], PHONE[0]] : PHONE; frame.style.width = w + 'px'; frame.style.height = h + 'px'; box.style.width = w + 'px'; box.style.height = h + 'px'; turn.textContent = landscape ? 'Turn to portrait' : 'Turn to landscape'; };
+  const settings = preview => {
+    const t = { success: success.value.trim() || txt().success, fail: failT.value.trim() || txt().fail, play: play.value.trim() || txt().play };
+    return { aspect: SIZES.find(s => s.id === size.value).aspect, outside: outside.value, topBar: topBar.checked, boosters: { show: boost.checked, count: Math.max(0, Math.min(9, parseInt(boostN.value, 10) || 0)) },
+      clicks: clicksOn.checked ? Math.max(1, Math.min(100, parseInt(clicks.value, 10) || 25)) : 0, seconds: secondsOn.checked ? Math.max(1, Math.min(100, parseInt(seconds.value, 10) || 50)) : 0,
+      store: storeUrl(pkg.value.trim()), badges: { success: t.success, fail: t.fail },
+      end: { bg: endBg.value, color: endColor.value, opacity: (parseInt(endOpacity.value, 10) || 0) / 100, play: t.play, icon: B.icon, iconBg: B.iconBg, iconColor: B.iconColor }, preview: !!preview };
+  };
+  const allFiles = async () => { if (!B.fileCache) B.fileCache = await filesMap(B.g, B.paths); return B.fileCache; };
+  // into the file: all the game's picture files when they are small; else only the ones this level asked for in the preview
+  const files = async () => B.size <= ALL_FILES_MAX ? allFiles() : Object.fromEntries(Object.entries(await allFiles()).filter(([p]) => B.used.has(lvl() + ':' + p)));
+  const make = async preview => playableHtml({ page: B.built.page, files: preview ? await allFiles() : await files(),
+    module: B.module, id, level: lvl(), lang: langs.length > 1 ? lang.value : null, settings: settings(preview), network: network.value, title: cfg.title });
+  let timer = 0;
+  const show = () => { clearTimeout(timer); timer = setTimeout(async () => { presses = 0; opens = []; logUp(); try { frame.srcdoc = await make(true); } catch (e) { events.replaceChildren(note('bad', e.message)); } }, 250); };
+  const logUp = () => { counters.textContent = 'Taps: ' + presses + (opens.length ? ' · the store opened ' + opens.length + '×' : ''); };
+  window.onmessage = e => {   // (one listener: the tab's own)
+    if (e.source !== frame.contentWindow || !e.data || typeof e.data.pk !== 'string') return;
+    const d = e.data;
+    if (d.pk === 'press') { presses = d.presses; logUp(); }
+    else if (d.pk === 'file' && typeof d.path === 'string') B.used.add(lvl() + ':' + d.path);
+    else if (d.pk === 'store') { opens.push(d.reason); logUp(); events.prepend(el('div', { text: '→ the store opens (' + ({ clicks: 'after ' + clicks.value + ' taps', time: seconds.value + ' s after the first tap', endcard: 'Play on the end card' }[d.reason] || 'a tap after the store opened once') + ')' })); }
+    else if (d.pk === 'ended') events.prepend(el('div', { text: d.kind === 'win' ? 'Level won: Success badge, then the end card' : 'Level failed: Fail badge, then the end card' }));
+    else if (d.pk === 'endcard') events.prepend(el('div', { text: 'End card shown' }));
+  };
+  // ----- export
+  const out = el('div', { class: 'stack', id: 'pl-out' }), exp = el('button', { type: 'button', id: 'pl-export', text: 'Save the file' });
+  exp.addEventListener('click', async () => {
+    exp.disabled = true; out.replaceChildren(el('p', { class: 'muted', text: 'Making the file…' }));
+    try {
+      if (!/^[a-z][a-z0-9_]*(\.[a-z0-9_]+)+$/i.test(pkg.value.trim())) throw new Error('The store package is not a package name (e.g. com.duste.' + id + ').');
+      if (B.paths.length && B.size > ALL_FILES_MAX && ![...B.used].some(u => u.startsWith(lvl() + ':'))) throw new Error('Let the preview load the level first (its picture files are taken from what the level uses).');
+      const html = await make(false), rp = report(html, await files());
+      const fname = (name.value.trim() || defName()).replace(/[\\/:*?"<>|]+/g, '_').replace(/\.html?$/i, '') + '.' + NETWORKS[network.value].ext;
+      const a = el('a', { href: URL.createObjectURL(new Blob([html], { type: 'text/html' })), download: fname }); document.body.append(a); a.click(); a.remove();
+      P.name = name.value; P.nameFor = [initials.value, size.value, lang.value].join('|'); save();
+      out.replaceChildren(note(rp.under5 && !rp.outside.length && rp.mraidOpen ? 'good' : 'warn', el('div', { class: 'stack' },
+        el('strong', { text: 'Saved ' + fname }),
+        el('span', { text: (rp.mb).toFixed(2) + ' MB' + (rp.under5 ? ' (under 5 MB)' : ' (over 5 MB: networks may refuse it)') + '; ' + (rp.files ? rp.files + ' picture file(s) of the game inside' : 'no picture files needed') }),
+        el('span', { text: rp.outside.length ? 'It loads from outside: ' + rp.outside.join(', ') : 'Nothing is loaded from outside: everything is inside the file.' }),
+        el('span', { text: rp.mraidOpen ? 'The store opens with mraid.open (' + storeUrl(pkg.value.trim()) + ').' : 'The store call (mraid.open) is missing.' }))));
+    } catch (e) { out.replaceChildren(note('bad', e.message)); }
+    exp.disabled = false;
+  });
+  // ----- layout
+  const row = (...k) => el('div', { class: 'row' }, ...k);
+  body.replaceChildren(el('div', { class: 'pl-grid' },
+    el('div', { class: 'stack' },
+      el('section', { class: 'card' }, el('h2', { text: 'Level' }), el('div', { class: 'form' },
+        el('label', {}, 'Level (1-' + levels + ')', level), langs.length > 1 ? el('label', {}, 'Language', lang) : null, el('label', {}, 'Size', size),
+        el('label', {}, 'Color around the game', outside)),
+        el('label', { class: 'check' }, topBar, ' Top bar (the level and the settings button)'),
+        boosters ? el('label', { class: 'check' }, boost, ' Boosters, ', boostN, ' of each') : el('p', { class: 'small muted', text: 'This game has no boosters.' })),
+      el('section', { class: 'card' }, el('h2', { text: 'Store' }), el('div', { class: 'form' }, el('label', {}, 'Store package', pkg)),
+        el('p', { class: 'small muted', id: 'pl-url' }),
+        el('label', { class: 'check' }, clicksOn, ' Open the store after ', clicks, ' taps (that tap, and every tap after it)'),
+        el('label', { class: 'check' }, secondsOn, ' Open the store ', seconds, ' seconds after the first tap (once; then every tap)'),
+        el('p', { class: 'small muted', text: 'The end card comes when the level is won or failed, or once the last chosen trigger has opened the store.' })),
+      el('section', { class: 'card' }, el('h2', { text: 'Badges and end card' }), el('div', { class: 'form' },
+        el('label', {}, 'Success badge', success), el('label', {}, 'Fail badge', failT), el('label', {}, 'Play button', play),
+        el('label', {}, 'End card background', endBg), el('label', {}, 'Its color', endColor), el('label', {}, 'Its opacity', endOpacity, opOut))),
+      el('section', { class: 'card' }, el('h2', { text: 'File' }), el('div', { class: 'form' },
+        el('label', {}, 'Game initials', initials), el('label', {}, 'File name', name), el('label', {}, 'Network', network)),
+        row(exp), out)),
+    el('section', { class: 'card pl-side' }, el('h2', { text: 'Preview' }), el('p', { class: 'small muted', text: 'The file itself, on a phone. Taps, the store and the end card are reported below.' }),
+      box, row(turn, restart), counters, events)));
+  const urlNote = () => { $('#pl-url').textContent = storeUrl(pkg.value.trim()); };
+  urlNote(); opOut.textContent = endOpacity.value + '%'; fit();
+  const changed = () => {
+    Object.assign(P, { level: lvl(), lang: lang.value, size: size.value, topBar: topBar.checked, boost: boost.checked, boostN: parseInt(boostN.value, 10) || 0, clicksOn: clicksOn.checked, clicks: parseInt(clicks.value, 10) || 25,
+      secondsOn: secondsOn.checked, seconds: parseInt(seconds.value, 10) || 50, pkg: pkg.value.trim(), initials: initials.value.trim(), endBg: endBg.value, endColor: endColor.value, endOpacity: parseInt(endOpacity.value, 10) || 0, outside: outside.value });
+    P.texts[P.lang] = { success: success.value, fail: failT.value, play: play.value };
+    if (!nameTouched) name.value = defName();
+    urlNote(); opOut.textContent = endOpacity.value + '%'; save(); show();
+  };
+  for (const c of [level, size, topBar, boost, boostN, clicksOn, clicks, secondsOn, seconds, pkg, success, failT, play, endBg, endColor, endOpacity, outside, initials]) c.addEventListener(c.type === 'text' || c.type === 'range' || c.type === 'color' ? 'input' : 'change', changed);
+  lang.addEventListener('change', () => { P.lang = lang.value; fillTexts(); changed(); });
+  turn.addEventListener('click', () => { landscape = !landscape; fit(); });
+  restart.addEventListener('click', show);
+  show();
+}
+
 // ---------- routing ----------
-const VIEWS = { dashboard: dashboardView, submissions: submissionsView, submission: submissionView, submit: submitView, builds: buildsView, record: recordView, art: artView };
+const VIEWS = { dashboard: dashboardView, submissions: submissionsView, submission: submissionView, submit: submitView, builds: buildsView, record: recordView, playable: playableView, art: artView };
 async function route() {
   if (!S) {
     const v = session.load();
