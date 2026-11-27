@@ -741,6 +741,14 @@ try {
   ok('playable: the preview plays the level at once, top bar hidden', await plf.locator('#dk-hud .lvl').first().isHidden() && await plf.locator('html.pk-on').count() === 1);
   ok('playable: no tutorial card to read (only the hand steps, when the game gives them)', await plf.locator('#dk-pops .dk-panel').count() === 0 && await p.isChecked('#pl-tutorial') && !(await p.isChecked('#pl-howto')));
   ok('playable: Desk says what the lesson did on this level', /lesson/i.test(await p.innerText('#pl-lesson')), await p.innerText('#pl-lesson'));
+  // a text box: added, its words typed (the preview shows them at once, nothing restarts), dragged in the preview (Desk hears where)
+  await p.click('#pl-addbox'); await p.fill('#pl-box0-text', 'Only 1% can solve this!');
+  await plf.locator('.pk-tb').first().waitFor({ timeout: 5000 });
+  ok('playable: a text box shows in the preview as it is typed', (await plf.locator('.pk-tb').first().innerText()).includes('Only 1% can solve this!'));
+  const tb = await plf.locator('.pk-tb').first().boundingBox();
+  await p.mouse.move(tb.x + tb.width / 2, tb.y + tb.height / 2); await p.mouse.down(); await p.mouse.move(tb.x + tb.width / 2, tb.y + tb.height / 2 + 120, { steps: 8 }); await p.mouse.up(); await p.waitForTimeout(300);
+  const ny = +(await p.inputValue('#pl-box0-y'));
+  ok('playable: a text box dragged in the preview moves, and Desk keeps its place', ny > 15 && /Taps: 0/.test(await p.innerText('#pl-count')), 'down: ' + ny + '%, ' + (await p.innerText('#pl-count')));
   ok('playable: the file name is the default, from the game\'s initials', /^[A-Z]{2,4}_Playable_PureGP_9x16_EN$/.test(await p.inputValue('#pl-name')), await p.inputValue('#pl-name'));
   await p.locator('#pl-frame').scrollIntoViewIfNeeded(); await p.waitForTimeout(300);
   const fb = await p.locator('#pl-frame').boundingBox();
@@ -754,6 +762,7 @@ try {
   const plHtml = fs.readFileSync(dlPath, 'utf8');
   ok('playable: saved as <name>.html', /^[A-Z]{2,4}_Playable_PureGP_9x16_EN\.html$/.test(pdl.suggestedFilename()), pdl.suggestedFilename());
   ok('playable: the How to play choice is in the file', plHtml.includes('"tutorial":true'));
+  ok('playable: the text box is in the file', plHtml.includes('Only 1% can solve this!'));
   ok('playable: losing is on by default, in the file', await p.isChecked('#pl-canlose') && plHtml.includes('"canLose":true'));
   ok('playable: one file, nothing from outside, the store through mraid.open', !/(src|href)\s*=\s*["']https?:/i.test(plHtml) && plHtml.includes('mraid.open(') && !plHtml.includes('mraid.js'));
   ok('playable: the report says its size and that it is complete', /MB/.test(await p.innerText('#pl-out')) && /Nothing is loaded from outside/.test(await p.innerText('#pl-out')));

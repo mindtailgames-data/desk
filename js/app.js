@@ -1431,7 +1431,8 @@ async function playableEditor(body, id, info, sha, rel, current) {
   const levels = (info && info.levels) || 50, boosters = (cfg.boosters || []).length;   // (the game's own levels, not the repeats after them)
   const r = (rel || []).filter(x => x.game === id && x.package).slice(-1)[0];
   const P = Object.assign({ level: 1, lang: langs[0], size: '9x16', tutorial: true, howto: false, canLose: true, topBar: true, boost: true, boostN: 3, clicksOn: true, clicks: 25, secondsOn: false, seconds: 50,
-    pkg: r ? r.package : 'com.duste.' + id, initials: initialsOf(cfg.title), endBg: 'image', endColor: '#1F62DD', endOpacity: 60, outside: '#0E0B26', texts: {} }, plPrefs(id));
+    pkg: r ? r.package : 'com.duste.' + id, initials: initialsOf(cfg.title), endBg: 'image', endColor: '#1F62DD', endOpacity: 60, outside: '#0E0B26', texts: {}, boxes: [] }, plPrefs(id));
+  if (!Array.isArray(P.boxes)) P.boxes = [];
   const txt = () => Object.assign({}, PL_TEXTS[P.lang] || PL_TEXTS.en, P.texts[P.lang] || {});
   const save = () => savePlPrefs(id, P);
   // ----- the controls
@@ -1476,7 +1477,7 @@ async function playableEditor(body, id, info, sha, rel, current) {
     const t = { success: success.value.trim() || txt().success, fail: failT.value.trim() || txt().fail, play: play.value.trim() || txt().play };
     return { aspect: SIZES.find(s => s.id === size.value).aspect, outside: outside.value, tutorial: tutorial.checked, howto: howto.checked, canLose: canLose.checked, topBar: topBar.checked, boosters: { show: boost.checked, count: Math.max(0, Math.min(9, parseInt(boostN.value, 10) || 0)) },
       clicks: clicksOn.checked ? Math.max(1, Math.min(100, parseInt(clicks.value, 10) || 25)) : 0, seconds: secondsOn.checked ? Math.max(1, Math.min(100, parseInt(seconds.value, 10) || 50)) : 0,
-      store: storeUrl(pkg.value.trim()), badges: { success: t.success, fail: t.fail },
+      store: storeUrl(pkg.value.trim()), badges: { success: t.success, fail: t.fail }, texts: boxTexts(),
       end: { bg: endBg.value, color: endColor.value, opacity: (parseInt(endOpacity.value, 10) || 0) / 100, play: t.play, icon: B.icon, iconBg: B.iconBg, iconColor: B.iconColor }, preview: !!preview };
   };
   const allFiles = async () => { if (!B.fileCache) B.fileCache = await filesMap(B.g, B.paths); return B.fileCache; };
@@ -1496,6 +1497,7 @@ async function playableEditor(body, id, info, sha, rel, current) {
     else if (d.pk === 'ended') events.prepend(el('div', { text: d.kind === 'win' ? 'Level won: Success badge, then the end card' : 'Level failed: Fail badge, then the end card' }));
     else if (d.pk === 'endcard') events.prepend(el('div', { text: 'End card shown' }));
     else if (d.pk === 'lesson') lessonNote(d);
+    else if (d.pk === 'textmove' && P.boxes[d.i]) { const b = P.boxes[d.i]; b.x = d.x; b.y = d.y; save(); for (const k of ['x', 'y']) { const c = $('#pl-box' + d.i + '-' + k); if (c) { c.value = String(b[k]); if (c.nextSibling) c.nextSibling.textContent = b[k] + '%'; } } }
     else if (d.pk === 'nofail') { const t = $('#pl-nofail'); if (t) { t.textContent = d.on && !d.supported ? 'This game doesn\'t hide its moves or hearts yet: a lost level goes on with its Play On instead, so the player sees them come back (its chat must update it; the checker\'s F5 says so).' : ''; t.className = d.on && !d.supported ? 'small warn-text' : 'small muted'; } }
     else if (d.pk === 'continued') events.prepend(el('div', { text: 'Level lost: it goes on (the game\'s Play On, free)' + (d.times > 1 ? ' · ' + d.times + '×' : '') }));
   };
@@ -1518,6 +1520,36 @@ async function playableEditor(body, id, info, sha, rel, current) {
     } catch (e) { out.replaceChildren(note('bad', e.message)); }
     exp.disabled = false;
   });
+  // ----- text boxes (up to 3): the layout shared, the words per language; every change shows in the preview at once
+  const BOX = { x: 50, y: 15, w: 80, h: 0, size: 22, color: '#ffffff', stroke: '#1a1240', strokeW: 2, bg: '#000000', bgOp: 0, shown: 'fixed', seconds: 3 };
+  const boxTexts = () => P.boxes.map(b => ({ text: (b.text && b.text[lang.value]) || '', x: b.x, y: b.y, w: b.w, h: b.h, size: b.size, color: b.color, stroke: b.stroke, strokeW: b.strokeW,
+    bg: b.bg, bgOpacity: (+b.bgOp || 0) / 100, shown: b.shown, seconds: b.seconds }));
+  const boxLive = () => { save(); try { frame.contentWindow.postMessage({ pkTexts: boxTexts() }, '*'); } catch (e) {} };
+  const boxList = el('div', { class: 'stack', id: 'pl-boxes' }), addBox = el('button', { type: 'button', class: 'ghost', id: 'pl-addbox', text: 'Add a text box' });
+  const drawBoxes = () => {
+    boxList.replaceChildren(...P.boxes.map((b, i) => {
+      const f = (k, label, props, conv) => { const c = el('input', Object.assign({ id: 'pl-box' + i + '-' + k, value: String(b[k]) }, props)); const out = props.type === 'range' ? el('span', { class: 'small muted', text: b[k] + (props.unit || '') }) : null;
+        c.addEventListener('input', () => { b[k] = conv ? conv(c.value) : c.value; if (out) out.textContent = c.value + (props.unit || ''); boxLive(); }); return el('label', {}, label, c, out); };
+      const n = v => parseFloat(v) || 0;
+      const text = el('textarea', { id: 'pl-box' + i + '-text', rows: '2', placeholder: 'The words (' + lang.value.toUpperCase() + ')' }); text.value = (b.text && b.text[lang.value]) || '';
+      text.addEventListener('input', () => { b.text = Object.assign({}, b.text, { [lang.value]: text.value }); boxLive(); });
+      const shown = el('select', { id: 'pl-box' + i + '-shown' }, el('option', { value: 'fixed', text: 'All the time' }), el('option', { value: 'timed', text: 'Until N seconds after the first tap' })); shown.value = b.shown;
+      const secs = f('seconds', 'N (seconds)', { type: 'number', min: '1', max: '100' }, v => Math.max(1, Math.min(100, parseInt(v, 10) || 3)));
+      const showSecs = () => { secs.hidden = shown.value !== 'timed'; }; showSecs();
+      shown.addEventListener('change', () => { b.shown = shown.value; showSecs(); boxLive(); });
+      const del = el('button', { type: 'button', class: 'ghost', text: 'Remove' }); del.addEventListener('click', () => { P.boxes.splice(i, 1); drawBoxes(); boxLive(); });
+      return el('fieldset', { class: 'pl-box' }, el('legend', { text: 'Text box ' + (i + 1) }), el('label', {}, 'Text', text), el('div', { class: 'form' },
+        f('x', 'Across (centre)', { type: 'range', min: '0', max: '100', unit: '%' }, n), f('y', 'Down (centre)', { type: 'range', min: '0', max: '100', unit: '%' }, n),
+        f('w', 'Box width', { type: 'range', min: '10', max: '100', unit: '%' }, n), f('h', 'Box height (0: fits the text)', { type: 'range', min: '0', max: '100', unit: '%' }, n),
+        f('size', 'Text size (px)', { type: 'number', min: '8', max: '60' }, v => Math.max(8, Math.min(60, n(v) || 22))),
+        f('color', 'Text color', { type: 'color' }), f('stroke', 'Stroke color', { type: 'color' }), f('strokeW', 'Stroke thickness (px)', { type: 'number', min: '0', max: '8', step: '0.5' }, v => Math.max(0, Math.min(8, n(v)))),
+        f('bg', 'Background color', { type: 'color' }), f('bgOp', 'Background opacity', { type: 'range', min: '0', max: '100', unit: '%' }, n),
+        el('label', {}, 'Shown', shown), secs), el('div', { class: 'row' }, del));
+    }));
+    addBox.disabled = P.boxes.length >= 3;
+  };
+  addBox.addEventListener('click', () => { if (P.boxes.length >= 3) return; P.boxes.push(Object.assign({ text: {} }, BOX, { y: [15, 30, 85][P.boxes.length] })); drawBoxes(); boxLive(); });
+  drawBoxes();
   // ----- layout
   const row = (...k) => el('div', { class: 'row' }, ...k);
   body.replaceChildren(el('div', { class: 'pl-grid' },
@@ -1540,6 +1572,8 @@ async function playableEditor(body, id, info, sha, rel, current) {
       el('section', { class: 'card' }, el('h2', { text: 'Badges and end card' }), el('div', { class: 'form' },
         el('label', {}, 'Success badge', success), el('label', {}, 'Fail badge', failT), el('label', {}, 'Play button', play),
         el('label', {}, 'End card background', endBg), el('label', {}, 'Its color', endColor), el('label', {}, 'Its opacity', endOpacity, opOut))),
+      el('section', { class: 'card' }, el('h2', { text: 'Text boxes' }), el('p', { class: 'small muted', text: 'Up to 3, anywhere on the level, in the game\'s font. Drag a box in the preview to move it; taps go through it to the game. The words are kept per language.' }),
+        boxList, row(addBox)),
       el('section', { class: 'card' }, el('h2', { text: 'File' }), el('div', { class: 'form' },
         el('label', {}, 'Game initials', initials), el('label', {}, 'File name', name), el('label', {}, 'Network', network)),
         row(exp), out)),
@@ -1565,7 +1599,7 @@ async function playableEditor(body, id, info, sha, rel, current) {
     urlNote(); opOut.textContent = endOpacity.value + '%'; save(); show();
   };
   for (const c of [level, size, tutorial, howto, canLose, topBar, boost, boostN, clicksOn, clicks, secondsOn, seconds, pkg, success, failT, play, endBg, endColor, endOpacity, outside, initials]) c.addEventListener(c.type === 'text' || c.type === 'range' || c.type === 'color' ? 'input' : 'change', changed);
-  lang.addEventListener('change', () => { P.lang = lang.value; fillTexts(); changed(); });
+  lang.addEventListener('change', () => { P.lang = lang.value; fillTexts(); drawBoxes(); changed(); });
   turn.addEventListener('click', () => { landscape = !landscape; fit(); });
   restart.addEventListener('click', show);
   show();

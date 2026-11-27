@@ -203,3 +203,8 @@ label.check { display: flex; flex-direction: row; align-items: center; gap: 6px;
 label.check input[type=number] { width: 64px; }
 @media (max-width: 900px) { .pl-grid { grid-template-columns: 1fr; } .pl-side { position: static; } }
 .warn-text { color: var(--warn); font-weight: 600; }   /* (a short warning line in a form: the playable lesson note) */
+.pl-box { border: 1px solid var(--line, #d9dce3); border-radius: 10px; padding: 10px 12px 12px; margin: 0; }   /* (a playable's text box: its settings) */
+.pl-box legend { font-weight: 600; padding: 0 4px; }
+.pl-box textarea { width: 100%; box-sizing: border-box; font: inherit; }
+.pl-box .form { grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 14px; }   /* (two settings a row: three boxes stay short) */
+@media (max-width: 560px) { .pl-box .form { grid-template-columns: minmax(0, 1fr); } }
