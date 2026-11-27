@@ -669,13 +669,17 @@ try {
   await p.selectOption('#rec-game', recGame); await p.fill('#rec-level', '2'); await p.selectOption('#rec-phone', '1080x2340');
   const hasHand = await p.$('#rec-kind option[value="hand"]:not([disabled])');
   await p.selectOption('#rec-kind', hasHand ? 'hand' : 'circle');
+  ok('record: the top bar and the boosters are shown unless switched off', await p.isChecked('#rec-topbar') && await p.isChecked('#rec-boosters'));
+  await p.uncheck('#rec-boosters');   // (the video without the boosters; the top bar stays)
   await p.click('#rec-open');
   await p.waitForSelector('#rec-start:not([disabled])', { timeout: 120000 });
   const rf = p.frameLocator('#rec-frame');
   ok('record: the game is played at the phone\'s own size (360 x 780 for 1080 x 2340)', await p.$eval('#rec-frame', f => f.style.width === '360px' && f.style.height === '780px'));
   await rf.locator('#dk-home .lvl-btn').first().waitFor({ timeout: 60000 });
   ok('record: the chosen touches are drawn in the game', await rf.locator(hasHand ? 'body > div > div > img[src^="data:image/png"]' : 'body > div > div[style*="border-radius: 50%"]').count() === (hasHand ? 2 : 1));   // (a hand: its picture in two parts, cut at the finger joint)
+  ok('record: the boosters are switched off in the game from its opening, the top bar is not', await rf.locator('html.pk-noboost').count() === 1 && await rf.locator('html.pk-notop').count() === 0);
   await p.click('#rec-start'); await p.waitForSelector('#rec-stop', { timeout: 10000 });
+  ok('record: the switches are locked while filming', await p.isDisabled('#rec-boosters'));
   await p.waitForTimeout(600);
   await rf.locator('#dk-home .lvl-btn').first().click();
   await p.waitForTimeout(1500);
@@ -689,6 +693,7 @@ try {
   const rd = recordDispatches[0], rr = recordRuns[0] && recordRuns[0].recording;
   ok('record: the recording is sent with the game, its commit and a request name', !!rd && rd.inputs.game === recGame && /^[0-9a-f]{40}$/.test(rd.inputs.sha) && rd.inputs.sha === refOf(FAC, 'main') && rd.inputs.request.startsWith(recGame + '-'));
   ok('record: it holds the size, level, touches and the filmed part', !!rr && rr.size === '1080x2340' && rr.level === 2 && rr.finger.kind === (hasHand ? 'hand' : 'circle') && rr.log.some(e => e[1] === 's') && rr.log.some(e => e[1] === 'e') && rr.log.filter(e => e[1] === 'd').length >= 3, rr && JSON.stringify({ size: rr.size, level: rr.level, finger: rr.finger, n: rr.log.length }));
+  ok('record: the recording says the boosters are off (the cloud hides them too)', !!rr && rr.hud && rr.hud.boosters === false && rr.hud.topBar === true, rr && JSON.stringify(rr.hud));
   ok('record: no tap or picture is sent as a secret: the recording has no data: pictures', !!rd && !Buffer.from(rd.inputs.recording, 'base64').includes('data:image'));
   const ready = await p.waitForSelector('#rec-videos .chip:has-text("Ready"), #rec-videos .chip:has-text("No video")', { timeout: 600000 }).then(e => e.innerText(), () => 'nothing');
   const ri = recordRuns[0] && recordRuns[0].info;

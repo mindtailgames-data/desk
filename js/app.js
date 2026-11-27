@@ -1152,6 +1152,12 @@ async function recordView() {
     const level = el('input', { id: 'rec-level', type: 'number', min: '1', value: String(Math.max(1, parseInt(pref.level, 10) || 1)) });
     const phone = el('select', { id: 'rec-phone' }, ...PHONES.map(p => el('option', { value: p.id, text: p.label })));
     if (PHONES.some(p => p.id === pref.size)) phone.value = pref.size;
+    // ----- the top bar and the boosters on the video (fixed from the game's opening: hidden boosters can't be tapped, so
+    // the cloud must hide them from the start too; a change restarts the game)
+    const topBar = el('input', { id: 'rec-topbar', type: 'checkbox' }); topBar.checked = pref.topBar !== false;
+    const boosters = el('input', { id: 'rec-boosters', type: 'checkbox' }); boosters.checked = pref.boosters !== false;
+    const hudCfg = () => ({ topBar: topBar.checked, boosters: boosters.checked });
+    for (const x of [topBar, boosters]) x.addEventListener('change', () => { saveRecPrefs(hudCfg()); if (filming && filming.state !== 'filming') load(); });
     // ----- the finger on the video
     const kind = el('select', { id: 'rec-kind' }, el('option', { value: 'none', text: 'Nothing: only the game' }), el('option', { value: 'circle', text: 'A circle' }), el('option', { value: 'hand', text: 'A hand', disabled: !hands.length }));
     kind.value = ['none', 'circle', 'hand'].includes(pref.kind) && (pref.kind !== 'hand' || hands.length) ? pref.kind : 'circle';
@@ -1182,7 +1188,9 @@ async function recordView() {
         el('label', {}, 'Game', game), el('label', {}, 'Start at level', level), el('label', {}, 'Phone', phone),
         el('label', {}, 'Touches on the video', kind), handRow,
         el('label', {}, 'Size of the circle or hand', size, sizeOut)),
-      el('p', { class: 'small muted', text: 'The touches can be changed any time, also after filming: the cloud draws the ones chosen when you press "Make the video". The game is the latest approved version (main).' }),
+      el('label', { class: 'check' }, topBar, ' Top bar (the level and the settings button)'),
+      el('label', { class: 'check' }, boosters, ' Boosters'),
+      el('p', { class: 'small muted', text: 'The touches can be changed any time, also after filming: the cloud draws the ones chosen when you press "Make the video". The top bar and boosters are fixed when the game opens (changing them starts the game again). The game is the latest approved version (main).' }),
       el('div', { class: 'row' }, open)));
     fingerChanged();
 
@@ -1207,7 +1215,8 @@ async function recordView() {
       f.storage = { ['dk.' + f.id + '.progress']: JSON.stringify({ next: f.level }) };
       if (f.langs.length > 1) f.storage['dk.' + f.id + '.lang'] = JSON.stringify(f.lang);
       f.log = null; f.from = -1; f.frame = 0; f.state = 'playing';
-      const cfg = { mode: 'live', seed: f.seed, base: f.base, storage: f.storage, finger: fingerCfg() };
+      f.hud = hudCfg();
+      const cfg = { mode: 'live', seed: f.seed, base: f.base, storage: f.storage, finger: fingerCfg(), hud: f.hud };
       frame.srcdoc = f.built.page.replace('<head>\n', () => '<head>\n<script>window.__REC=' + JSON.stringify(cfg).replace(/</g, '\\u003c') + ';<\/script>\n<script>' + f.runtime + '<\/script>\n' + f.built.files);
       fit(); f.update();
     };
@@ -1215,6 +1224,7 @@ async function recordView() {
     let shown = '';   // (what is drawn now: the frame reports, twice a second, redraw only when it changes; the filming clock updates in place)
     const update = () => {
       const f = filming; if (!f || !stage.isConnected) return;
+      topBar.disabled = boosters.disabled = f.state === 'filming';   // (not while filming: it would start the game again)
       const key = f.state + (f.state === 'playing' ? ':' + (f.frame > REC_OPEN_MAX * 60) + (f.frame >= 1) : '') + ':' + (f.log ? f.log.length : 0) + ':' + f.seed;
       if (key === shown) { if (f.state === 'filming') { const t = document.getElementById('rec-time'); if (t) t.textContent = secs(Math.max(0, f.frame - f.from)) + ' of ' + REC_MAX + ' s'; } return; }
       shown = key;
@@ -1241,7 +1251,7 @@ async function recordView() {
       const f = filming, fc = fingerCfg(), r = filmedOf(f.log);
       btn.disabled = true; out.replaceChildren(el('p', { class: 'muted', text: 'Sending…' }));
       try {
-        const recording = { game: f.id, level: f.level, lang: f.lang, size: f.size, seed: f.seed, base: f.base, storage: f.storage, finger: fc.kind === 'hand' ? { kind: 'hand', hand: fc.hand, size: fc.size } : fc.kind === 'circle' ? { kind: 'circle', size: fc.size } : { kind: 'none' }, log: f.log };
+        const recording = { game: f.id, level: f.level, lang: f.lang, size: f.size, seed: f.seed, base: f.base, storage: f.storage, hud: f.hud, finger: fc.kind === 'hand' ? { kind: 'hand', hand: fc.hand, size: fc.size } : fc.kind === 'circle' ? { kind: 'circle', size: fc.size } : { kind: 'none' }, log: f.log };
         const packed = await packRecording(recording);
         if (packed.length > 60000) throw new Error('This recording is too big to send to GitHub (' + Math.round(packed.length / 1000) + ' KB of 60). Film a shorter part, or press Start filming sooner after opening the game.');
         const req = f.id + '-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 6);
