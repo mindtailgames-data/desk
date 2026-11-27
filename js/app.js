@@ -1496,6 +1496,7 @@ async function playableEditor(body, id, info, sha, rel, current) {
     else if (d.pk === 'ended') events.prepend(el('div', { text: d.kind === 'win' ? 'Level won: Success badge, then the end card' : 'Level failed: Fail badge, then the end card' }));
     else if (d.pk === 'endcard') events.prepend(el('div', { text: 'End card shown' }));
     else if (d.pk === 'lesson') lessonNote(d);
+    else if (d.pk === 'nofail') { const t = $('#pl-nofail'); if (t) { t.textContent = d.on && !d.supported ? 'This game doesn\'t hide its moves or hearts yet: a lost level goes on with its Play On instead, so the player sees them come back (its chat must update it; the checker\'s F5 says so).' : ''; t.className = d.on && !d.supported ? 'small warn-text' : 'small muted'; } }
     else if (d.pk === 'continued') events.prepend(el('div', { text: 'Level lost: it goes on (the game\'s Play On, free)' + (d.times > 1 ? ' · ' + d.times + '×' : '') }));
   };
   // ----- export
@@ -1527,7 +1528,8 @@ async function playableEditor(body, id, info, sha, rel, current) {
         el('label', { class: 'check' }, tutorial, ' Tutorial: level 1\'s lesson (its hand steps and texts), on this level'),
         el('label', { class: 'check' }, howto, ' Then level 1\'s How to play card (if it has one)'),
         el('p', { class: 'small muted', id: 'pl-lesson' }),
-        el('label', { class: 'check' }, canLose, ' The player can lose (the Fail badge, then the end card). Off: a lost level goes on, with the game\'s Play On (free, no screen)'),
+        el('label', { class: 'check' }, canLose, ' The player can lose (the Fail badge, then the end card). Off: no moves, hearts or timer on screen, and the level can\'t be lost'),
+        el('p', { class: 'small muted', id: 'pl-nofail' }),
         el('label', { class: 'check' }, topBar, ' Top bar (the level and the settings button)'),
         boosters ? el('label', { class: 'check' }, boost, ' Boosters, ', boostN, ' of each') : el('p', { class: 'small muted', text: 'This game has no boosters.' })),
       el('section', { class: 'card' }, el('h2', { text: 'Store' }), el('div', { class: 'form' }, el('label', {}, 'Store package', pkg)),
